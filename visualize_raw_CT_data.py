@@ -141,7 +141,6 @@ class RawCTViewer(QMainWindow):
         self.min_series = min_slice
         self.max_series = max_slice
 
-        print()
         # Load the data
         self.ct_3D_image = None
         self.z_positions = np.zeros((max_slice - min_slice + 1,), dtype=np.float32)
