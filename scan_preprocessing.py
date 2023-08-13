@@ -25,7 +25,7 @@ def standardize_pixel_array(dcm: pydicom.dataset.FileDataset) -> np.ndarray:
     return pixel_array
 
 def to_float_array(dcm: pydicom.dataset.FileDataset) -> np.ndarray:
-    image = standardize_pixel_array(dcm)
+    image = standardize_pixel_array(dcm).astype(np.float32)
     image = (image - image.min()) / (image.max() - image.min() + 1e-6)
 
     if dcm.PhotometricInterpretation == "MONOCHROME1":
