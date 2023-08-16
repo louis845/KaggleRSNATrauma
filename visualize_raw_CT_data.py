@@ -4,9 +4,13 @@ import traceback
 import pydicom
 import numpy as np
 
-from PySide2.QtWidgets import QApplication, QMainWindow, QFrame, QTreeView, QSlider, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox
+from PySide2.QtWidgets import QApplication, QMainWindow, QFrame, QTreeView, QSlider, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QCheckBox
 from PySide2.QtCore import Qt, QThread, Signal
 from PySide2.QtGui import QStandardItemModel, QStandardItem, QPixmap, QImage
+import matplotlib
+matplotlib.use("Qt5Agg")
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 import scan_preprocessing
 
@@ -16,9 +20,13 @@ class RawCTViewer(QMainWindow):
     ct_3D_image: np.ndarray # Contains the 3D CT scan data. Shape is (z, y, x).
     z_positions: np.ndarray # Contains the z positions of the slices. Shape is (z,).
 
+    fig: plt.Figure
+    image_canvas: FigureCanvas
+
     def __init__(self):
         super().__init__()
         self.ct_folder = os.path.join("data", "train_images")
+        self.ct_npy_folder = "data_npy"
 
         self.setup_ui()
         self.setup_folders()
@@ -63,9 +71,12 @@ class RawCTViewer(QMainWindow):
         self.left_panel.setLayout(self.left_panel_layout)
         self.tree_view.setEditTriggers(QTreeView.NoEditTriggers)
 
-        # Create a label to display the image
-        self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignCenter)
+        # Create a checkbox to toggle between dicom and npy
+        self.dicom_checkbox = QCheckBox("DICOM")
+        self.dicom_checkbox.setChecked(True)
+        # Create a matplotlib canvas to display the image
+        self.fig = plt.figure()
+        self.image_canvas = FigureCanvas(self.fig)
         # Create a label for the slice number
         self.slice_number_label = QLabel()
         self.slice_number_label.setText("Slice Number: 0")
@@ -80,7 +91,8 @@ class RawCTViewer(QMainWindow):
         self.slice_number_slider.setFixedHeight(self.slice_number_slider.sizeHint().height())
         # Add the slider and label to the main panel
         self.main_panel_layout = QVBoxLayout()
-        self.main_panel_layout.addWidget(self.image_label)
+        self.main_panel_layout.addWidget(self.dicom_checkbox)
+        self.main_panel_layout.addWidget(self.image_canvas)
         self.main_panel_layout.addWidget(self.slice_number_label)
         self.main_panel_layout.addWidget(self.slice_number_slider)
 
@@ -101,6 +113,11 @@ class RawCTViewer(QMainWindow):
         self.tree_view_model = QStandardItemModel()
         self.tree_view_model.setHorizontalHeaderLabels(["Patient ID", "Series ID"])
         self.tree_view.setModel(self.tree_view_model)
+
+        self.patient_ids = [int(patient_id) for patient_id in self.patient_ids]
+        self.patient_ids.sort()
+        self.patient_ids = [str(patient_id) for patient_id in self.patient_ids]
+
         for patient_id in self.patient_ids:
             patient_id_item = QStandardItem(patient_id)
             self.tree_view_model.appendRow(patient_id_item)
@@ -132,6 +149,7 @@ class RawCTViewer(QMainWindow):
 
     def load_ct_scan(self, patient_id: str, series_id: str):
         series_folder = os.path.join(self.ct_folder, patient_id, series_id)
+        series_folder_npy = os.path.join(self.ct_npy_folder, patient_id, series_id)
         ct_scan_files = [int(dcm[:-4]) for dcm in os.listdir(series_folder)]
         ct_scan_files.sort()
 
@@ -142,18 +160,26 @@ class RawCTViewer(QMainWindow):
         self.max_series = max_slice
 
         # Load the data
-        self.ct_3D_image = None
-        self.z_positions = np.zeros((max_slice - min_slice + 1,), dtype=np.float32)
-        for slice_number in range(min_slice, max_slice + 1):
-            dcm_file = os.path.join(series_folder, "{}.dcm".format(slice_number))
-            dcm_data = pydicom.dcmread(dcm_file)
-            slice_array = scan_preprocessing.to_float_array(dcm_data)
-            if self.ct_3D_image is None:
-                self.ct_3D_image = np.zeros(
-                    (max_slice - min_slice + 1, slice_array.shape[0], slice_array.shape[1]),
-                    dtype=np.uint8)
-            self.ct_3D_image[slice_number - min_slice] = (slice_array * 255).astype(np.uint8)
-            self.z_positions[slice_number - min_slice] = dcm_data[(0x20, 0x32)].value[-1]
+        if self.dicom_checkbox.isChecked():
+            print("Loading DICOM data...")
+            # load from dicom file
+            self.ct_3D_image = None
+            self.z_positions = np.zeros((max_slice - min_slice + 1,), dtype=np.float32)
+            for slice_number in range(min_slice, max_slice + 1):
+                dcm_file = os.path.join(series_folder, "{}.dcm".format(slice_number))
+                dcm_data = pydicom.dcmread(dcm_file)
+                slice_array = scan_preprocessing.to_float_array(dcm_data)
+                if self.ct_3D_image is None:
+                    self.ct_3D_image = np.zeros(
+                        (max_slice - min_slice + 1, slice_array.shape[0], slice_array.shape[1]),
+                        dtype=np.uint8)
+                self.ct_3D_image[slice_number - min_slice, :, :] = (slice_array * 255).astype(np.uint8)
+                self.z_positions[slice_number - min_slice] = dcm_data[(0x20, 0x32)].value[-1]
+        else:
+            print("Loading NPY data...")
+            # load from npy file
+            self.ct_3D_image = (np.load(os.path.join(series_folder_npy, "ct_3D_image.npy")) * 255).astype(np.uint8)
+            self.z_positions = np.load(os.path.join(series_folder_npy, "z_positions.npy"))
 
         # Update the slider
         self.slice_number_slider.setRange(min_slice, max_slice)
@@ -171,10 +197,12 @@ class RawCTViewer(QMainWindow):
             slice_number = self.slice_number_slider.value()
             # Get the image
             image = self.ct_3D_image[slice_number - self.min_series]
-            # Convert to QImage
-            q_image = QImage(image.data, image.shape[1], image.shape[0], QImage.Format_Grayscale8)
-            # Set the image
-            self.image_label.setPixmap(QPixmap.fromImage(q_image))
+
+            # Plot it on the image canvas, which is a matplotlib widget. update self.fig
+            self.fig.clear()
+            self.fig.add_subplot(111).imshow(image, cmap="gray")
+            self.image_canvas.draw()
+
 
 if __name__ == "__main__":
     app = QApplication([])
