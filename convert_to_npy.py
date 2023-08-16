@@ -25,8 +25,8 @@ def get_array_and_zpos(series_folder: str) -> (np.ndarray, np.ndarray):
         if ct_3D_image is None:
             ct_3D_image = np.zeros(
                 (max_slice - min_slice + 1, slice_array.shape[0], slice_array.shape[1]),
-                dtype=np.float32)
-        ct_3D_image[slice_number - min_slice] = slice_array
+                dtype=np.float16)
+        ct_3D_image[slice_number - min_slice] = slice_array.astype(np.float16)
         z_positions[slice_number - min_slice] = dcm_data[(0x20, 0x32)].value[-1]
 
     return ct_3D_image, z_positions
