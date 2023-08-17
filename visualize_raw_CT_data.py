@@ -3,8 +3,9 @@ import os
 import traceback
 import pydicom
 import numpy as np
+import cv2
 
-from PySide2.QtWidgets import QApplication, QMainWindow, QFrame, QTreeView, QSlider, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QCheckBox
+from PySide2.QtWidgets import QApplication, QMainWindow, QFrame, QTreeView, QSlider, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QComboBox
 from PySide2.QtCore import Qt, QThread, Signal
 from PySide2.QtGui import QStandardItemModel, QStandardItem, QPixmap, QImage
 import matplotlib
@@ -71,9 +72,9 @@ class RawCTViewer(QMainWindow):
         self.left_panel.setLayout(self.left_panel_layout)
         self.tree_view.setEditTriggers(QTreeView.NoEditTriggers)
 
-        # Create a checkbox to toggle between dicom and npy
-        self.dicom_checkbox = QCheckBox("DICOM")
-        self.dicom_checkbox.setChecked(True)
+        # Create a dropdown to toggle between dicom, rescaled_dicom, and npy
+        self.image_options = QComboBox()
+        self.image_options.addItems(["dicom", "rescaled_dicom", "npy"])
         # Create a matplotlib canvas to display the image
         self.fig = plt.figure()
         self.image_canvas = FigureCanvas(self.fig)
@@ -91,7 +92,7 @@ class RawCTViewer(QMainWindow):
         self.slice_number_slider.setFixedHeight(self.slice_number_slider.sizeHint().height())
         # Add the slider and label to the main panel
         self.main_panel_layout = QVBoxLayout()
-        self.main_panel_layout.addWidget(self.dicom_checkbox)
+        self.main_panel_layout.addWidget(self.image_options)
         self.main_panel_layout.addWidget(self.image_canvas)
         self.main_panel_layout.addWidget(self.slice_number_label)
         self.main_panel_layout.addWidget(self.slice_number_slider)
@@ -160,7 +161,7 @@ class RawCTViewer(QMainWindow):
         self.max_series = max_slice
 
         # Load the data
-        if self.dicom_checkbox.isChecked():
+        if self.image_options.currentText() == "dicom":
             print("Loading DICOM data...")
             # load from dicom file
             self.ct_3D_image = None
@@ -169,6 +170,30 @@ class RawCTViewer(QMainWindow):
                 dcm_file = os.path.join(series_folder, "{}.dcm".format(slice_number))
                 dcm_data = pydicom.dcmread(dcm_file)
                 slice_array = scan_preprocessing.to_float_array(dcm_data)
+                if self.ct_3D_image is None:
+                    self.ct_3D_image = np.zeros(
+                        (max_slice - min_slice + 1, slice_array.shape[0], slice_array.shape[1]),
+                        dtype=np.uint8)
+                self.ct_3D_image[slice_number - min_slice, :, :] = (slice_array * 255).astype(np.uint8)
+                self.z_positions[slice_number - min_slice] = dcm_data[(0x20, 0x32)].value[-1]
+        elif self.image_options.currentText() == "rescaled_dicom":
+            print("Loading rescaled DICOM data...")
+            # load from dicom file
+            self.ct_3D_image = None
+            self.z_positions = np.zeros((max_slice - min_slice + 1,), dtype=np.float32)
+            shape = None
+            for slice_number in range(min_slice, max_slice + 1):
+                dcm_file = os.path.join(series_folder, "{}.dcm".format(slice_number))
+                dcm_data = pydicom.dcmread(dcm_file)
+                slice_array = scan_preprocessing.to_float_array(dcm_data)
+                if shape is None:
+                    scales = np.array(dcm_data.PixelSpacing)
+                    shape = slice_array.shape
+                    new_shape = (int(shape[0] * scales[0]), int(shape[1] * scales[1]))
+                    slice_array = cv2.resize(slice_array, (new_shape[1], new_shape[0]))
+                    shape = slice_array.shape
+                else:
+                    slice_array = cv2.resize(slice_array, (shape[1], shape[0]))
                 if self.ct_3D_image is None:
                     self.ct_3D_image = np.zeros(
                         (max_slice - min_slice + 1, slice_array.shape[0], slice_array.shape[1]),
@@ -198,8 +223,9 @@ class RawCTViewer(QMainWindow):
             # Get the image
             image = self.ct_3D_image[slice_number - self.min_series]
 
-            # Plot it on the image canvas, which is a matplotlib widget. update self.fig
+            # Plot it on the image canvas, which is a matplotlib widget. update self.fig. make sure to explicitly set size of the plot to equal to the size of the image
             self.fig.clear()
+            self.fig.set_size_inches(image.shape[1] / 100, image.shape[0] / 100)
             self.fig.add_subplot(111).imshow(image, cmap="gray")
             self.image_canvas.draw()
 
