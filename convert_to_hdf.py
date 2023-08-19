@@ -9,6 +9,8 @@ if not os.path.isdir("data_hdf5"):
 
 for patient_id in tqdm.tqdm(os.listdir("data_npy")):
     patient_folder = os.path.join("data_npy", patient_id)
+    if not os.path.isdir(patient_folder):
+        continue
     for series_id in os.listdir(patient_folder):
         series_folder = os.path.join(patient_folder, series_id)
 
