@@ -4,6 +4,7 @@ import traceback
 import pydicom
 import numpy as np
 import cv2
+import h5py
 
 from PySide2.QtWidgets import QApplication, QMainWindow, QFrame, QTreeView, QSlider, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QComboBox
 from PySide2.QtCore import Qt, QThread, Signal
@@ -28,6 +29,7 @@ class RawCTViewer(QMainWindow):
         super().__init__()
         self.ct_folder = os.path.join("data", "train_images")
         self.ct_npy_folder = "data_npy"
+        self.ct_hdf5_folder = "data_hdf5"
 
         self.setup_ui()
         self.setup_folders()
@@ -74,7 +76,7 @@ class RawCTViewer(QMainWindow):
 
         # Create a dropdown to toggle between dicom, rescaled_dicom, and npy
         self.image_options = QComboBox()
-        self.image_options.addItems(["dicom", "rescaled_dicom", "npy"])
+        self.image_options.addItems(["dicom", "rescaled_dicom", "npy", "hdf5"])
         # Create a matplotlib canvas to display the image
         self.fig = plt.figure()
         self.image_canvas = FigureCanvas(self.fig)
@@ -151,6 +153,7 @@ class RawCTViewer(QMainWindow):
     def load_ct_scan(self, patient_id: str, series_id: str):
         series_folder = os.path.join(self.ct_folder, patient_id, series_id)
         series_folder_npy = os.path.join(self.ct_npy_folder, patient_id, series_id)
+        series_folder_hdf5 = os.path.join(self.ct_hdf5_folder, patient_id, series_id)
         ct_scan_files = [int(dcm[:-4]) for dcm in os.listdir(series_folder)]
         ct_scan_files.sort()
 
@@ -200,11 +203,30 @@ class RawCTViewer(QMainWindow):
                         dtype=np.uint8)
                 self.ct_3D_image[slice_number - min_slice, :, :] = (slice_array * 255).astype(np.uint8)
                 self.z_positions[slice_number - min_slice] = dcm_data[(0x20, 0x32)].value[-1]
-        else:
+        elif self.image_options.currentText() == "npy":
             print("Loading NPY data...")
-            # load from npy file
-            self.ct_3D_image = (np.load(os.path.join(series_folder_npy, "ct_3D_image.npy")) * 255).astype(np.uint8)
-            self.z_positions = np.load(os.path.join(series_folder_npy, "z_positions.npy"))
+            if os.path.isfile(os.path.join(series_folder_npy, "ct_3D_image.npy")):
+                # load from npy file
+                self.ct_3D_image = (np.load(os.path.join(series_folder_npy, "ct_3D_image.npy")) * 255).astype(np.uint8)
+                self.z_positions = np.load(os.path.join(series_folder_npy, "z_positions.npy"))
+            else:
+                # show dialog "NPY data not found. If you haven't generated the NPY files, please run convert_to_npy.py. If you have converted the NPY to HDF5, please view them with HDF5 option."
+                QMessageBox.information(self, "NPY data not found",
+                                        "NPY data not found. If you haven't generated the NPY files, please run convert_to_npy.py. If you have converted the NPY to HDF5, please view them with HDF5 option.")
+                return
+        else:
+            print("Loading HDF5 data...")
+            # load from HDF5 file
+            if not os.path.isfile(os.path.join(series_folder_hdf5, "ct_3D_image.hdf5")):
+                # show dialog "HDF5 data not found. If you haven't generated the HDF5 files, please run convert_to_hdf5.py."
+                QMessageBox.information(self, "HDF5 data not found",
+                                        "HDF5 data not found. If you haven't generated the HDF5 files, please run convert_to_hdf5.py.")
+                return
+            else:
+                with h5py.File(os.path.join(series_folder_hdf5, "ct_3D_image.hdf5"), "r") as f:
+                    self.ct_3D_image = f["ct_3D_image"][()]
+                self.z_positions = np.load(os.path.join(series_folder_hdf5, "z_positions.npy"))
+
 
         # Update the slider
         self.slice_number_slider.setRange(min_slice, max_slice)
