@@ -14,7 +14,10 @@ matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
+import multiprocessing
 import scan_preprocessing
+import image_sampler
+import image_sampler_async
 
 class RawCTViewer(QMainWindow):
 
@@ -76,7 +79,7 @@ class RawCTViewer(QMainWindow):
 
         # Create a dropdown to toggle between dicom, rescaled_dicom, and npy
         self.image_options = QComboBox()
-        self.image_options.addItems(["dicom", "rescaled_dicom", "npy", "hdf5"])
+        self.image_options.addItems(["dicom", "rescaled_dicom", "npy", "hdf5", "hdf5_sampler", "hdf5_sampler_async"])
         # Create a matplotlib canvas to display the image
         self.fig = plt.figure()
         self.image_canvas = FigureCanvas(self.fig)
@@ -101,6 +104,9 @@ class RawCTViewer(QMainWindow):
 
         # Set the layout of the main panel
         self.main_panel.setLayout(self.main_panel_layout)
+
+        # Create an async image sampler
+        self.async_loader = image_sampler_async.ImageLoaderWorker("async_loader")
 
     def setup_folders(self):
         self.patient_ids = os.listdir(self.ct_folder)
@@ -214,7 +220,7 @@ class RawCTViewer(QMainWindow):
                 QMessageBox.information(self, "NPY data not found",
                                         "NPY data not found. If you haven't generated the NPY files, please run convert_to_npy.py. If you have converted the NPY to HDF5, please view them with HDF5 option.")
                 return
-        else:
+        elif self.image_options.currentText() == "hdf5":
             print("Loading HDF5 data...")
             # load from HDF5 file
             if not os.path.isfile(os.path.join(series_folder_hdf5, "ct_3D_image.hdf5")):
@@ -226,6 +232,19 @@ class RawCTViewer(QMainWindow):
                 with h5py.File(os.path.join(series_folder_hdf5, "ct_3D_image.hdf5"), "r") as f:
                     self.ct_3D_image = f["ct_3D_image"][()]
                 self.z_positions = np.load(os.path.join(series_folder_hdf5, "z_positions.npy"))
+        elif self.image_options.currentText() == "hdf5_sampler":
+            print("Loading HDF5 sampler data...")
+            self.ct_3D_image = image_sampler.load_image(patient_id, series_id, slices_random=True, augmentation=True)
+            self.z_positions = np.zeros((15,), dtype=np.float32)
+            self.min_series, self.max_series = 0, 14
+            min_slice, max_slice = 0, 14
+        elif self.image_options.currentText() == "hdf5_sampler_async":
+            print("Loading HDF5 sampler async...")
+            self.async_loader.request_load_image({"patient_id": patient_id, "series_id": series_id, "slices_random": True, "augmentation": True})
+            self.ct_3D_image = self.async_loader.get_requested_image()
+            self.z_positions = np.zeros((15,), dtype=np.float32)
+            self.min_series, self.max_series = 0, 14
+            min_slice, max_slice = 0, 14
 
 
         # Update the slider
@@ -251,8 +270,12 @@ class RawCTViewer(QMainWindow):
             self.fig.add_subplot(111).imshow(image, cmap="gray")
             self.image_canvas.draw()
 
+    def closeEvent(self, event):
+        self.async_loader.terminate()
 
 if __name__ == "__main__":
+    multiprocessing.set_start_method("spawn")
+
     app = QApplication([])
     window = RawCTViewer()
     window.show()
