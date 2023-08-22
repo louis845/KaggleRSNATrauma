@@ -1,5 +1,7 @@
 import torch
 
+BATCH_NORM_MOMENTUM = 0.1
+
 class ResConvBlock(torch.nn.Module):
     def __init__(self, in_channels, out_channels, normalization_type="batchnorm",
                  downsample=False, bottleneck_factor=1, squeeze_excitation=False):
@@ -22,7 +24,7 @@ class ResConvBlock(torch.nn.Module):
 
         self.conv1 = torch.nn.Conv3d(in_channels, bottleneck_channels, 1, bias=False, padding="same", padding_mode="replicate")
         if normalization_type == "batchnorm":
-            self.batchnorm1 = torch.nn.BatchNorm3d(bottleneck_channels)
+            self.batchnorm1 = torch.nn.BatchNorm3d(bottleneck_channels, momentum=BATCH_NORM_MOMENTUM)
         elif normalization_type == "instancenorm":
             self.batchnorm1 = torch.nn.InstanceNorm3d(bottleneck_channels)
         self.elu1 = torch.nn.ReLU(inplace=True)
@@ -35,7 +37,7 @@ class ResConvBlock(torch.nn.Module):
             self.conv2 = torch.nn.Conv3d(bottleneck_channels, bottleneck_channels, kernel_size=(1, 3, 3), bias=False,
                                          padding="same", padding_mode="replicate", groups=num_groups)
         if normalization_type == "batchnorm":
-            self.batchnorm2 = torch.nn.BatchNorm3d(bottleneck_channels)
+            self.batchnorm2 = torch.nn.BatchNorm3d(bottleneck_channels, momentum=BATCH_NORM_MOMENTUM)
         elif normalization_type == "instancenorm":
             self.batchnorm2 = torch.nn.InstanceNorm3d(bottleneck_channels)
         self.elu2 = torch.nn.ReLU(inplace=True)
@@ -43,7 +45,7 @@ class ResConvBlock(torch.nn.Module):
         self.conv3 = torch.nn.Conv3d(bottleneck_channels, out_channels, 1, bias=False, padding="same",
                                      padding_mode="replicate")
         if normalization_type == "batchnorm":
-            self.batchnorm3 = torch.nn.BatchNorm3d(out_channels)
+            self.batchnorm3 = torch.nn.BatchNorm3d(out_channels, momentum=BATCH_NORM_MOMENTUM)
         elif normalization_type == "instancenorm":
             self.batchnorm3 = torch.nn.InstanceNorm3d(out_channels)
         self.elu3 = torch.nn.ReLU(inplace=True)
@@ -140,7 +142,7 @@ class ResNetBackbone(torch.nn.Module):
         self.initial_conv = torch.nn.Conv3d(in_channels, hidden_channels, kernel_size=(1, 7, 7),
                                             bias=False, padding="same", padding_mode="replicate")
         if normalization_type == "batchnorm":
-            self.initial_batchnorm = torch.nn.BatchNorm3d(hidden_channels)
+            self.initial_batchnorm = torch.nn.BatchNorm3d(hidden_channels, momentum=BATCH_NORM_MOMENTUM)
         elif normalization_type == "instancenorm":
             self.initial_batchnorm = torch.nn.InstanceNorm3d(hidden_channels)
         self.initial_elu = torch.nn.ReLU(inplace=True)
@@ -166,9 +168,9 @@ class ResNetBackbone(torch.nn.Module):
 
         return ret
 
-class PatchAttnClassifierHead(torch.nn.Module):
-    def __init__(self, channels, out_classes=[3], key_dim=8, normalization_type="batchnorm"):
-        super(PatchAttnClassifierHead, self).__init__()
+class PatchAttnClassifierNeck(torch.nn.Module):
+    def __init__(self, channels, out_classes=[3], key_dim=8):
+        super(PatchAttnClassifierNeck, self).__init__()
 
         self.channels = channels
         self.out_classes = out_classes
@@ -230,9 +232,13 @@ class MeanProbaReductionHead(torch.nn.Module):
 
     def forward(self, outs):
         probas = []
-        for out in outs:
+        for k in range(self.num_outs):
+            out = outs[k]
             out = out.squeeze(-1).squeeze(-1)
-            out = torch.softmax(out, dim=1)
+            if self.out_classes[k] == 1:
+                out = torch.sigmoid(out)
+            else:
+                out = torch.softmax(out, dim=1)
             probas.append(torch.mean(out, dim=2))
         return probas
 
@@ -255,3 +261,16 @@ class UnionProbaReductionHead(torch.nn.Module):
             probas.append(1 - torch.prod(1 - out, dim=2))
         return probas
 
+class FullClassifier(torch.nn.Module):
+    def __init__(self, backbone: torch.nn.Module, neck: torch.nn.Module, head: torch.nn.Module):
+        super(FullClassifier, self).__init__()
+
+        self.backbone = backbone
+        self.neck = neck
+        self.head = head
+
+    def forward(self, x):
+        x = self.backbone(x)
+        attn, outs = self.neck(x)
+        probas = self.head(outs)
+        return probas

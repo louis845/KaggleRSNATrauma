@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 
+import numpy as np
 import pandas as pd
 from sklearn.model_selection import StratifiedKFold
 
@@ -29,7 +30,7 @@ def add_argparse_arguments(parser: argparse.ArgumentParser):
     parser.add_argument("--val_data", type=str, required=True)
     parser.parse_args()
 
-def parse_args(args: argparse.Namespace):
+def parse_args(args: argparse.Namespace) -> tuple[list[int], list[int]]:
     train_data = args.train_data
     val_data = args.val_data
     assert dataset_exists(train_data)
@@ -69,11 +70,11 @@ def get_summarization_string(body_parts: dict[str, bool]):
 
     return label_str, summary
 
-def get_bowel_status(patient_ids: list[int]) -> pd.DataFrame:
-    return patient_injuries[["bowel_healthy", "bowel_injury"]].loc[patient_ids]
+def get_bowel_status(patient_ids: list[int]) -> pd.Series:
+    return patient_injuries["bowel_injury"].loc[patient_ids]
 
-def get_extravasation_status(patient_ids: list[int]) -> pd.DataFrame:
-    return patient_injuries[["extravasation_healthy", "extravasation_injury"]].loc[patient_ids]
+def get_extravasation_status(patient_ids: list[int]) -> pd.Series:
+    return patient_injuries["extravasation_injury"].loc[patient_ids]
 
 def get_kidney_status(patient_ids: list[int]) -> pd.DataFrame:
     return patient_injuries[["kidney_healthy", "kidney_low", "kidney_high"]].loc[patient_ids]
@@ -83,6 +84,50 @@ def get_liver_status(patient_ids: list[int]) -> pd.DataFrame:
 
 def get_spleen_status(patient_ids: list[int]) -> pd.DataFrame:
     return patient_injuries[["spleen_healthy", "spleen_low", "spleen_high"]].loc[patient_ids]
+
+def get_kidney_status_binary(patient_ids: list[int]) -> pd.Series:
+    return patient_injuries["kidney_low"].loc[patient_ids] + patient_injuries["kidney_high"].loc[patient_ids]
+
+def get_liver_status_binary(patient_ids: list[int]) -> pd.Series:
+    return patient_injuries["liver_low"].loc[patient_ids] + patient_injuries["liver_high"].loc[patient_ids]
+
+def get_spleen_status_binary(patient_ids: list[int]) -> pd.Series:
+    return patient_injuries["spleen_low"].loc[patient_ids] + patient_injuries["spleen_high"].loc[patient_ids]
+
+def get_patient_status(patient_ids: list[int], labels: dict[str, object]) -> dict[str, np.ndarray]:
+    """
+    Returns a numpy array for each required label. If the label is binary, returns a (n,) array of 0s and 1s.
+    If the label is multiclass, returns a (n, 3) array in one-hot encoding.
+    """
+    columns = {}
+    if labels["bowel"]:
+        columns["bowel"] = get_bowel_status(patient_ids).values
+    if labels["extravasation"]:
+        columns["extravasation"] = get_extravasation_status(patient_ids).values
+    if labels["kidney"] == 2:
+        columns["kidney"] = get_kidney_status(patient_ids).values
+    elif labels["kidney"] == 1:
+        columns["kidney"] = get_kidney_status_binary(patient_ids).values
+    if labels["liver"] == 2:
+        columns["liver"] = get_liver_status(patient_ids).values
+    elif labels["liver"] == 1:
+        columns["liver"] = get_liver_status_binary(patient_ids).values
+    if labels["spleen"] == 2:
+        columns["spleen"] = get_spleen_status(patient_ids).values
+    elif labels["spleen"] == 1:
+        columns["spleen"] = get_spleen_status_binary(patient_ids).values
+    return columns
+
+def get_patient_status_labels(patient_ids: list[int], labels: dict[str, object]) -> dict[str, np.ndarray]:
+    """
+    Returns a numpy array for each required label. Returns a (n,) array for each label regardless of the type of label.
+    The array contains values 0, 1, 2 if multiclass, and values 0, 1 if binary.
+    """
+    columns = get_patient_status(patient_ids, labels)
+    for column in columns:
+        if len(columns[column].shape) > 1:
+            columns[column] = np.argmax(columns[column], axis=1)
+    return columns
 
 if __name__ == "__main__":
     label_str, summary = get_summarization_string({"bowel": False, "extravasation": False, "kidney": True, "liver": False, "spleen": True})
