@@ -23,12 +23,6 @@ import manager_models
 import model_resnet
 import metrics
 
-train_history = None
-train_metrics: dict[str, metrics.Metrics] = {}
-val_history = None
-val_metrics: dict[str, metrics.Metrics] = {}
-
-
 def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
                          img_sample_batch_: torch.Tensor, labels_batch_: dict[str, torch.Tensor]):
     optimizer_.zero_grad()
