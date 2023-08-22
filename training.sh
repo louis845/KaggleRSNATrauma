@@ -1,0 +1,2 @@
+python training_classifier.py --model testing --device 0 --train_data small_kidney_fold_0 --val_data small_kidney_fold_1 --kidney 1 --spleen 1 --async_sampler --proba_head mean
+python training_classifier.py --model testing2 --device 1 --train_data small_kidney_fold_0 --val_data small_kidney_fold_1 --kidney 1 --spleen 1 --async_sampler --proba_head union
