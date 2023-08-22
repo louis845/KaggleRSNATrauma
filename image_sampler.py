@@ -93,3 +93,6 @@ def obtain_sample_batch(patient_ids: list[str], series_ids: list[str], slices_ra
 class ImageSampler:
     def obtain_sample_batch(self, patient_ids: list[str], series_ids: list[str], slices_random: bool, augmentation: bool):
         return obtain_sample_batch(patient_ids, series_ids, slices_random, augmentation)
+
+    def close(self):
+        pass
