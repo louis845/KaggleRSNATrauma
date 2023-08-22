@@ -426,8 +426,8 @@ if __name__ == "__main__":
             print_history(train_history)
             print_history(val_history)
             # save metrics
-            train_df = pd.DataFrame(train_metrics)
-            val_df = pd.DataFrame(val_metrics)
+            train_df = pd.DataFrame(train_history)
+            val_df = pd.DataFrame(val_history)
             train_df.to_csv(os.path.join(model_dir, "train_metrics.csv"), index=True)
             val_df.to_csv(os.path.join(model_dir, "val_metrics.csv"), index=True)
 
@@ -447,10 +447,11 @@ if __name__ == "__main__":
     torch.save(optimizer.state_dict(), os.path.join(model_dir, "optimizer.pt"))
 
     # save metrics
-    train_df = pd.DataFrame(train_metrics)
-    val_df = pd.DataFrame(val_metrics)
-    train_df.to_csv(os.path.join(model_dir, "train_metrics.csv"), index=True)
-    val_df.to_csv(os.path.join(model_dir, "val_metrics.csv"), index=True)
+    if len(train_history) > 0:
+        train_df = pd.DataFrame(train_history)
+        val_df = pd.DataFrame(val_history)
+        train_df.to_csv(os.path.join(model_dir, "train_metrics.csv"), index=True)
+        val_df.to_csv(os.path.join(model_dir, "val_metrics.csv"), index=True)
 
     memory_logger.close()
 

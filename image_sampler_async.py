@@ -145,7 +145,7 @@ class ImageSamplerAsync:
         for i in range(batch_size):
             img_data = self.get_data_from_worker(i)
 
-            self.img_data_batch[i, 0, ...].copy_(img_data, non_blocking=True)
+            self.img_data_batch[i, 0, ...].copy_(torch.from_numpy(img_data), non_blocking=True)
 
         return self.img_data_batch[:batch_size, ...]
 

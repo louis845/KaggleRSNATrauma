@@ -85,7 +85,7 @@ def obtain_sample_batch(patient_ids: list[str], series_ids: list[str], slices_ra
     for i in range(batch_size):
         img_data = load_image(patient_ids[i], series_ids[i], slices=15,
                               slices_random=slices_random, augmentation=augmentation)
-        img_data_batch[i, 0, ...].copy_(img_data, non_blocking=True)
+        img_data_batch[i, 0, ...].copy_(torch.from_numpy(img_data), non_blocking=True)
 
     return img_data_batch
 
