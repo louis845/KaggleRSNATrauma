@@ -147,11 +147,11 @@ class ResNetBackbone(torch.nn.Module):
             self.initial_batchnorm = torch.nn.InstanceNorm3d(hidden_channels)
         self.initial_elu = torch.nn.ReLU(inplace=True)
 
-        self.conv_down.append(ResConv(hidden_channels, hidden_channels, normalization_type=normalization_type,
+        self.convs.append(ResConv(hidden_channels, hidden_channels, normalization_type=normalization_type,
                                       blocks=res_conv_blocks[0], bottleneck_factor=bottleneck_factor,
                                       squeeze_excitation=squeeze_excitation))
         for i in range(pyr_height - 1):
-            self.conv_down.append(ResConv(hidden_channels_override[i], hidden_channels_override[i] * 2,
+            self.convs.append(ResConv(hidden_channels_override[i], hidden_channels_override[i] * 2,
                         normalization_type=normalization_type, downsample=True, blocks=res_conv_blocks[i + 1],
                         bottleneck_factor=bottleneck_factor, squeeze_excitation=squeeze_excitation))
 
