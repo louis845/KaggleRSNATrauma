@@ -129,6 +129,14 @@ def get_patient_status_labels(patient_ids: list[int], labels: dict[str, object])
             columns[column] = np.argmax(columns[column], axis=1)
     return columns
 
+def randomly_pick_series(patient_ids: list) -> list:
+    series_ids = []
+    for patient_id in patient_ids:
+        patient_folder = os.path.join("data_hdf5", str(patient_id))
+        series = os.listdir(patient_folder)
+        series_ids.append(series[np.random.randint(len(series))])
+    return series_ids
+
 if __name__ == "__main__":
     label_str, summary = get_summarization_string({"bowel": False, "extravasation": False, "kidney": True, "liver": False, "spleen": True})
     kfold = StratifiedKFold(n_splits=3, shuffle=True)

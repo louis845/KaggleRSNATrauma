@@ -1,7 +1,27 @@
 import numpy as np
 import torch
 
-class NumericalMetric:
+import abc
+
+class Metrics(abc.ABC):
+    @abc.abstractmethod
+    def add(self, *args):
+        pass
+
+    @abc.abstractmethod
+    def get(self):
+        pass
+
+    @abc.abstractmethod
+    def write_to_dict(self, x: dict):
+        pass
+
+    @abc.abstractmethod
+    def reset(self):
+        pass
+
+
+class NumericalMetric(Metrics):
     def __init__(self, name: str):
         self.name = name
         self.reset()
@@ -20,7 +40,7 @@ class NumericalMetric:
         self.sum = 0.0
         self.count = 0
 
-class BinaryMetrics:
+class BinaryMetrics(Metrics):
     def __init__(self, name: str):
         self.name = name
         self.reset()
@@ -62,7 +82,7 @@ class BinaryMetrics:
         self.fp = 0
         self.fn = 0
 
-class TernaryMetrics:
+class TernaryMetrics(Metrics):
     def __init__(self, name: str):
         self.name = name
         self.reset()

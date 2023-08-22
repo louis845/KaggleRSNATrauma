@@ -236,10 +236,10 @@ class MeanProbaReductionHead(torch.nn.Module):
             out = outs[k]
             out = out.squeeze(-1).squeeze(-1)
             if self.out_classes[k] == 1:
-                out = torch.sigmoid(out)
+                out = torch.sigmoid(out).squeeze(1)
             else:
                 out = torch.softmax(out, dim=1)
-            probas.append(torch.mean(out, dim=2))
+            probas.append(torch.mean(out, dim=-1))
         return probas
 
 class UnionProbaReductionHead(torch.nn.Module):
@@ -256,7 +256,7 @@ class UnionProbaReductionHead(torch.nn.Module):
     def forward(self, outs):
         probas = []
         for out in outs:
-            out = out.squeeze(-1).squeeze(-1)
+            out = out.squeeze(-1).squeeze(-1).squeeze(1)
             out = torch.sigmoid(out)
             probas.append(1 - torch.prod(1 - out, dim=2))
         return probas

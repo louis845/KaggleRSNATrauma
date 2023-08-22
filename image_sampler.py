@@ -47,7 +47,7 @@ def randomly_augment_image(image: torch.Tensor):
 
 def load_image(patient_id: str, series_id: str, slices=15, slices_random=False, augmentation=False) -> np.ndarray:
     with torch.no_grad():
-        with h5py.File(os.path.join("data_hdf5", patient_id, series_id, "ct_3D_image.hdf5"), "r") as f:
+        with h5py.File(os.path.join("data_hdf5", str(patient_id), str(series_id), "ct_3D_image.hdf5"), "r") as f:
             ct_3D_image = f["ct_3D_image"]
             total_slices = ct_3D_image.shape[0]
 
@@ -88,3 +88,8 @@ def obtain_sample_batch(patient_ids: list[str], series_ids: list[str], slices_ra
         img_data_batch[i, 0, ...].copy_(img_data, non_blocking=True)
 
     return img_data_batch
+
+# dummy class
+class ImageSampler:
+    def obtain_sample_batch(self, patient_ids: list[str], series_ids: list[str], slices_random: bool, augmentation: bool):
+        return obtain_sample_batch(patient_ids, series_ids, slices_random, augmentation)

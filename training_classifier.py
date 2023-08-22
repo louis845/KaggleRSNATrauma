@@ -5,6 +5,7 @@ import argparse
 import json
 import traceback
 import multiprocessing
+import collections
 
 import pandas as pd
 import numpy as np
@@ -22,33 +23,63 @@ import manager_models
 import model_resnet
 import metrics
 
+train_history = None
+train_metrics: dict[str, metrics.Metrics] = {}
+val_history = None
+val_metrics: dict[str, metrics.Metrics] = {}
+
 
 def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
                          img_sample_batch_: torch.Tensor, labels_batch_: dict[str, torch.Tensor]):
     optimizer_.zero_grad()
     probas = model_(img_sample_batch_)
+    preds = {}
     losses = {}
     loss = 0
     for key in labels_batch_:
         gt = labels_batch_[key]
         if is_label_binary(key, used_labels):
             losses[key] = torch.nn.functional.binary_cross_entropy(probas[key], gt, reduction="sum")
+            preds[key] = (probas[key] > 0.5).squeeze(1).to(torch.long)
         else:
             losses[key] = torch.nn.functional.nll_loss(torch.log(probas[key]), gt, reduction="sum")
+            preds[key] = torch.argmax(probas[key], dim=1)
         loss = loss + losses[key]
     loss.backward()
     optimizer.step()
 
-    return probas, loss.item(), {key: losses[key].item() for key in losses}
+    return preds, loss.item(), {key: losses[key].item() for key in losses}
+
+def single_validation_step(model_: torch.nn.Module, img_sample_batch_: torch.Tensor, labels_batch_: dict[str, torch.Tensor]):
+    probas = model_(img_sample_batch_)
+    preds = {}
+    losses = {}
+    loss = 0
+    for key in labels_batch_:
+        gt = labels_batch_[key]
+        if is_label_binary(key, used_labels):
+            losses[key] = torch.nn.functional.binary_cross_entropy(probas[key], gt, reduction="sum")
+            preds[key] = (probas[key] > 0.5).squeeze(1).to(torch.long)
+        else:
+            losses[key] = torch.nn.functional.nll_loss(torch.log(probas[key]), gt, reduction="sum")
+            preds[key] = torch.argmax(probas[key], dim=1)
+        loss = loss + losses[key]
+    return preds, loss.item(), {key: losses[key].item() for key in losses}
+
+def labels_to_tensor(labels: dict[str, np.ndarray]):
+    labels_tensor = {}
+    for key in labels:
+        labels_tensor[key] = torch.tensor(labels[key], dtype=torch.long, device=config.device)
+    return labels_tensor
 
 def training_step(record:bool):
     if record:
-        current_train_metrics = metrics.BinaryMetrics()
+        for key in train_metrics:
+            train_metrics[key].reset()
+
 
     # shuffle
     training_entries_shuffle = np.random.permutation(training_entries)
-    if mixup:
-        training_entries_shuffle2 = np.random.permutation(training_entries)
 
     # training
     trained = 0
@@ -56,67 +87,92 @@ def training_step(record:bool):
         while trained < len(training_entries):
             # obtain batch
             current_size = min(len(training_entries) - trained, batch_size)
-            ctime = time.time()
-            if mixup:
-                batch_entries = training_entries_shuffle[trained:trained + current_size]
-                batch_entries2 = training_entries_shuffle2[trained:trained + current_size]
-                img_data_original_batch, img_data_ash_batch, ground_truth_data_batch = sampler.obtain_sample_mixup_split_batch(batch_entries, batch_entries2,
-                                                                                        mixup_beta=mixup, augmentation=True)
-            else:
-                batch_entries = training_entries_shuffle[trained:trained + current_size]
-                img_data_original_batch, img_data_ash_batch, ground_truth_data_batch = sampler.obtain_sample_split_batch(batch_entries, augmentation=True)
+            patient_ids = training_entries_shuffle[trained:trained + current_size] # patient ids
+            series_ids = manager_folds.randomly_pick_series(patient_ids)
+            img_data_batch = sampler.obtain_sample_batch(patient_ids, series_ids, slices_random=True, augmentation=True)
+            ground_truth_labels_batch = labels_to_tensor(manager_folds.get_patient_status_labels(patient_ids, used_labels))
 
-            output, loss = single_training_step_compile(model, optimizer, img_data_original_batch, img_data_ash_batch, ground_truth_data_batch)
+            preds, loss, individual_losses = single_training_step_compile(model, optimizer, img_data_batch, ground_truth_labels_batch)
 
             # record
             if record:
                 # compute metrics
                 with torch.no_grad():
-                    predict = torch.argmax(output, dim=1)
-                    actual = torch.argmax(ground_truth_data_batch, dim=1)
-                    tp, tn, fp, fn = metrics.compute_metrics(predict, actual)
-                    current_train_metrics.update(tp, tn, fp, fn, loss, current_size)
+                    for key in train_metrics:
+                        if key.endswith("loss"):
+                            if key == "loss":
+                                train_metrics[key].add(loss, current_size)
+                            else:
+                                organ = key[:-5]
+                                organ_loss = individual_losses[organ]
+                                train_metrics[key].add(organ_loss, current_size)
+                        else:
+                            organ = key
+                            pred = preds[organ]
+                            gt = ground_truth_labels_batch[organ]
+                            train_metrics[key].add(pred, gt)
+
 
             trained += current_size
             pbar.update(current_size)
 
     if record:
-        current_metrics = current_train_metrics.get_metrics()
-        train_metrics.update(current_metrics)
+        current_metrics = {}
+        for key in train_metrics:
+            train_metrics[key].write_to_dict(current_metrics)
+
+        for key in current_metrics:
+            train_history[key].append(current_metrics[key])
 
 def validation_step():
-    current_val_metrics = metrics.BinaryMetrics()
-    # validation
-    with torch.no_grad():
-        tested = 0
-        with tqdm.tqdm(total=len(validation_entries)) as pbar:
-            while tested < len(validation_entries):
+    # training
+    validated = 0
+    with tqdm.tqdm(total=len(validation_entries)) as pbar:
+        with torch.no_grad():
+            while validated < len(validation_entries):
                 # obtain batch
-                current_size = min(len(validation_entries) - tested, val_batch_size)
-                batch_entries = validation_entries[tested:tested + current_size]
-                img_data_original_batch, img_data_ash_batch, ground_truth_data_batch = sampler.obtain_sample_split_batch(batch_entries, augmentation=False)
+                current_size = min(len(validation_entries) - validated, batch_size)
+                patient_ids = validation_entries[validated:validated + current_size]  # patient ids
+                series_ids = manager_folds.randomly_pick_series(patient_ids)
+                img_data_batch = sampler.obtain_sample_batch(patient_ids, series_ids, slices_random=False, augmentation=False)
+                ground_truth_labels_batch = labels_to_tensor(manager_folds.get_patient_status_labels(patient_ids, used_labels))
 
-                # forward
-                output = model(img_data_original_batch, img_data_ash_batch)
-                if use_mixed_loss:
-                    loss = mixed_loss(output, ground_truth_data_batch)
-                else:
-                    loss = focal_loss(output, ground_truth_data_batch)
+                preds, loss, individual_losses = single_validation_step(model, img_data_batch, ground_truth_labels_batch)
 
                 # compute metrics
-                predict = torch.argmax(output, dim=1)
-                actual = torch.argmax(ground_truth_data_batch, dim=1)
-                tp, tn, fp, fn = metrics.compute_metrics(predict, actual)
-                current_val_metrics.update(tp, tn, fp, fn, loss.item(), current_size)
+                with torch.no_grad():
+                    for key in val_metrics:
+                        if key.endswith("loss"):
+                            if key == "loss":
+                                val_metrics[key].add(loss, current_size)
+                            else:
+                                organ = key[:-5]
+                                organ_loss = individual_losses[organ]
+                                val_metrics[key].add(organ_loss, current_size)
+                        else:
+                            organ = key
+                            pred = preds[organ]
+                            gt = ground_truth_labels_batch[organ]
+                            val_metrics[key].add(pred, gt)
 
-                tested += current_size
+                validated += current_size
                 pbar.update(current_size)
 
-    current_metrics = current_val_metrics.get_metrics()
-    val_metrics.update(current_metrics)
+    current_metrics = {}
+    for key in val_metrics:
+        val_metrics[key].write_to_dict(current_metrics)
+
+    for key in current_metrics:
+        val_history[key].append(current_metrics[key])
 
 def is_label_binary(label: str, used_labels: dict[str, object]):
     return (type(used_labels[label]) == bool) or (used_labels[label] == 1)
+
+def print_history(metrics_history: collections.defaultdict[str, list]):
+    for key in metrics_history:
+        if ("low" not in key) and ("high" not in key):
+            print("{}      {}".format(key, metrics_history[key][-1]))
+
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
@@ -135,6 +191,7 @@ if __name__ == "__main__":
     parser.add_argument("--bottleneck_factor", type=int, default=4, help="The bottleneck factor of the ResNet backbone. Default 4.")
     parser.add_argument("--squeeze_excitation", action="store_false", help="Whether to use squeeze and excitation. Default True.")
     parser.add_argument("--key_dim", type=int, default=8, help="The key dimension for the attention head. Default 8.")
+    parser.add_argument("--proba_head", type=str, default="mean", help="The type of probability head to use. Available options: mean, union. Default mean.")
     parser.add_argument("--num_extra_steps", type=int, default=0, help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
     parser.add_argument("--async_sampler", action="store_true", help="Whether to use the asynchronous sampler. Default False.")
     parser.add_argument("--bowel", action="store_true", help="Whether to use the bowel labels. Default False.")
@@ -206,13 +263,14 @@ if __name__ == "__main__":
     bottleneck_factor = args.bottleneck_factor
     squeeze_excitation = args.squeeze_excitation
     key_dim = args.key_dim
-    mixup = args.mixup
+    proba_head = args.proba_head
     num_extra_steps = args.num_extra_steps
     async_sampler = args.async_sampler
 
     assert type(hidden_blocks) == list, "Blocks must be a list."
     for k in hidden_blocks:
         assert type(k) == int, "Blocks must be a list of integers."
+    assert proba_head in ["mean", "union"], "Probability head must be mean or union."
 
     print("Hidden channels: " + str(args.hidden_channels))
     print("Hidden blocks: " + str(hidden_blocks))
@@ -228,8 +286,12 @@ if __name__ == "__main__":
                                            squeeze_excitation=squeeze_excitation)
     neck = model_resnet.PatchAttnClassifierNeck(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),
                                                 key_dim=key_dim, out_classes=out_classes)
-    head = model_resnet.MeanProbaReductionHead(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),
-                                                out_classes=out_classes)
+    if proba_head == "mean":
+        head = model_resnet.MeanProbaReductionHead(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),
+                                                    out_classes=out_classes)
+    else:
+        head = model_resnet.UnionProbaReductionHead(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),
+                                                  out_classes=out_classes)
     model = model_resnet.FullClassifier(backbone, neck, head)
     model = model.to(config.device)
 
@@ -277,6 +339,7 @@ if __name__ == "__main__":
         "bottleneck_factor": bottleneck_factor,
         "squeeze_excitation": squeeze_excitation,
         "key_dim": key_dim,
+        "proba_head": proba_head,
         "num_extra_steps": num_extra_steps,
         "async_sampler": async_sampler,
         "labels": used_labels,
@@ -289,9 +352,14 @@ if __name__ == "__main__":
 
     if async_sampler:
         sampler = image_sampler_async.ImageSamplerAsync(max_batch_size=batch_size, device=config.device)
+    else:
+        sampler = image_sampler.ImageSampler()
 
     # Create the metrics
+    global train_history, train_metrics, val_history, val_metrics
+    train_history = collections.defaultdict(list)
     train_metrics = {}
+    val_history = collections.defaultdict(list)
     val_metrics = {}
     if bowel:
         train_metrics["bowel"] = metrics.BinaryMetrics(name="train_bowel")
@@ -361,17 +429,13 @@ if __name__ == "__main__":
                 validation_step()
 
             print()
-            train_metrics.print_latest("TRAIN")
-            val_metrics.print_latest("VALID")
+            print_history(train_history)
+            print_history(val_history)
             # save metrics
-            train_df = train_metrics.to_dataframe()
-            val_df = val_metrics.to_dataframe()
+            train_df = pd.DataFrame(train_metrics)
+            val_df = pd.DataFrame(val_metrics)
             train_df.to_csv(os.path.join(model_dir, "train_metrics.csv"), index=True)
             val_df.to_csv(os.path.join(model_dir, "val_metrics.csv"), index=True)
-            assert len(train_df) == len(val_df), "The number of training and validation epochs must be the same."
-            # join the two dataframes, add "train_" suffix to train columns and "val_" suffix to val columns
-            df = train_df.join(val_df, lsuffix="_train", rsuffix="_val")
-            df.to_csv(os.path.join(model_dir, "metrics.csv"), index=True)
 
             if epoch % epochs_per_save == 0:
                 torch.save(model.state_dict(), os.path.join(model_dir, "model_{}.pt".format(epoch)))
@@ -389,14 +453,10 @@ if __name__ == "__main__":
     torch.save(optimizer.state_dict(), os.path.join(model_dir, "optimizer.pt"))
 
     # save metrics
-    train_df = train_metrics.to_dataframe()
-    val_df = val_metrics.to_dataframe()
+    train_df = pd.DataFrame(train_metrics)
+    val_df = pd.DataFrame(val_metrics)
     train_df.to_csv(os.path.join(model_dir, "train_metrics.csv"), index=True)
     val_df.to_csv(os.path.join(model_dir, "val_metrics.csv"), index=True)
-    assert len(train_df) == len(val_df), "The number of training and validation epochs must be the same."
-    # join the two dataframes, add "train_" suffix to train columns and "val_" suffix to val columns
-    df = train_df.join(val_df, lsuffix="_train", rsuffix="_val")
-    df.to_csv(os.path.join(model_dir, "metrics.csv"), index=True)
 
     memory_logger.close()
 
