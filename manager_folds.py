@@ -28,7 +28,6 @@ def save_dataset(dataset_name: str, dataset: list[int]):
 def add_argparse_arguments(parser: argparse.ArgumentParser):
     parser.add_argument("--train_data", type=str, required=True)
     parser.add_argument("--val_data", type=str, required=True)
-    parser.parse_args()
 
 def parse_args(args: argparse.Namespace) -> tuple[list[int], list[int]]:
     train_data = args.train_data
