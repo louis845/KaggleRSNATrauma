@@ -78,7 +78,7 @@ class ResConvBlock(torch.nn.Module):
         x = self.elu1(x)
 
         if self.downsample:
-            x = self.conv2(torch.nn.functional.pad(x, (1, 0, 1, 0), "reflect"))
+            x = self.conv2(torch.nn.functional.pad(x, (1, 0, 1, 0, 0, 0), "reflect"))
         else:
             x = self.conv2(x)
         x = self.batchnorm2(x)
@@ -157,7 +157,7 @@ class ResNetBackbone(torch.nn.Module):
 
     def forward(self, x):
         x = self.initial_conv(x)
-        x = self.initial_batch_norm(x)
+        x = self.initial_batchnorm(x)
         x = self.initial_elu(x)
 
         # contracting path
@@ -169,12 +169,13 @@ class ResNetBackbone(torch.nn.Module):
         return ret
 
 class PatchAttnClassifierNeck(torch.nn.Module):
-    def __init__(self, channels, out_classes=[3], key_dim=8):
+    def __init__(self, channels, out_classes={"label": 1}, key_dim=8):
         super(PatchAttnClassifierNeck, self).__init__()
 
         self.channels = channels
         self.out_classes = out_classes
         self.num_outs = len(out_classes)
+        self.out_id_to_key = []
         self.key_dim = key_dim
 
         self.query = torch.nn.Conv3d(channels, key_dim * self.num_outs, kernel_size=1, bias=False)
@@ -185,8 +186,9 @@ class PatchAttnClassifierNeck(torch.nn.Module):
 
         self.nonlinearity = torch.nn.ReLU(inplace=True)
         self.outconvs = torch.nn.ModuleList()
-        for i in range(self.num_outs):
-            self.outconvs.append(torch.nn.Conv3d(channels, out_classes[i], kernel_size=1, bias=False))
+        for key in out_classes:
+            self.outconvs.append(torch.nn.Conv3d(channels, out_classes[key], kernel_size=1, bias=False))
+            self.out_id_to_key.append(key)
 
         self.temperature = torch.sqrt(torch.tensor(1.0 / key_dim))
 
@@ -215,50 +217,61 @@ class PatchAttnClassifierNeck(torch.nn.Module):
         out = self.nonlinearity(torch.sum(value * attn, dim=-1))
         out = out.view(N, self.num_outs, self.channels, D, 1, 1)
 
-        outs = []
+        outs = {}
         for i in range(self.num_outs):
-            outs.append(self.outconvs[i](out[:, i, ...]))
+            outs[self.out_id_to_key[i]] = self.outconvs[i](out[:, i, ...])
 
         # output shape: (N, self.num_outs, D, H, W), [(N, sum(self.out_classes), D, 1, 1)]
         return attn.view(N, self.num_outs, D, H, W), outs
 
 class MeanProbaReductionHead(torch.nn.Module):
-    def __init__(self, channels, out_classes=[3]):
+    def __init__(self, channels, out_classes={"label": 1}):
         super(MeanProbaReductionHead, self).__init__()
 
         self.channels = channels
         self.out_classes = out_classes
+        self.out_id_to_key = []
         self.num_outs = len(out_classes)
 
+        for key in out_classes:
+            self.out_id_to_key.append(key)
+
     def forward(self, outs):
-        probas = []
+        probas = {}
         for k in range(self.num_outs):
-            out = outs[k]
+            key = self.out_id_to_key[k]
+            out = outs[key]
             out = out.squeeze(-1).squeeze(-1)
-            if self.out_classes[k] == 1:
+            if self.out_classes[key] == 1:
                 out = torch.sigmoid(out).squeeze(1)
             else:
                 out = torch.softmax(out, dim=1)
-            probas.append(torch.mean(out, dim=-1))
+            probas[key] = torch.mean(out, dim=-1)
         return probas
 
 class UnionProbaReductionHead(torch.nn.Module):
-    def __init__(self, channels, out_classes=[1]):
+    def __init__(self, channels, out_classes={"label": 1}):
         super(UnionProbaReductionHead, self).__init__()
 
         for k in out_classes:
-            assert k == 1, "UnionProbaReductionHead only supports binary classification"
+            assert out_classes[k] == 1, "UnionProbaReductionHead only supports binary classification"
 
         self.channels = channels
         self.out_classes = out_classes
+        self.out_id_to_key = []
         self.num_outs = len(out_classes)
 
+        for key in out_classes:
+            self.out_id_to_key.append(key)
+
     def forward(self, outs):
-        probas = []
-        for out in outs:
+        probas = {}
+        for k in range(self.num_outs):
+            key = self.out_id_to_key[k]
+            out = outs[key]
             out = out.squeeze(-1).squeeze(-1).squeeze(1)
             out = torch.sigmoid(out)
-            probas.append(1 - torch.prod(1 - out, dim=2))
+            probas[key] = 1 - torch.prod(1 - out, dim=-1)
         return probas
 
 class FullClassifier(torch.nn.Module):

@@ -33,8 +33,8 @@ def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimi
     for key in labels_batch_:
         gt = labels_batch_[key]
         if is_label_binary(key, used_labels):
-            losses[key] = torch.nn.functional.binary_cross_entropy(probas[key], gt, reduction="sum")
-            preds[key] = (probas[key] > 0.5).squeeze(1).to(torch.long)
+            losses[key] = torch.nn.functional.binary_cross_entropy(probas[key], gt.to(torch.float32), reduction="sum")
+            preds[key] = (probas[key] > 0.5).to(torch.long)
         else:
             losses[key] = torch.nn.functional.nll_loss(torch.log(probas[key]), gt, reduction="sum")
             preds[key] = torch.argmax(probas[key], dim=1)
@@ -52,8 +52,8 @@ def single_validation_step(model_: torch.nn.Module, img_sample_batch_: torch.Ten
     for key in labels_batch_:
         gt = labels_batch_[key]
         if is_label_binary(key, used_labels):
-            losses[key] = torch.nn.functional.binary_cross_entropy(probas[key], gt, reduction="sum")
-            preds[key] = (probas[key] > 0.5).squeeze(1).to(torch.long)
+            losses[key] = torch.nn.functional.binary_cross_entropy(probas[key], gt.to(torch.float32), reduction="sum")
+            preds[key] = (probas[key] > 0.5).to(torch.long)
         else:
             losses[key] = torch.nn.functional.nll_loss(torch.log(probas[key]), gt, reduction="sum")
             preds[key] = torch.argmax(probas[key], dim=1)
@@ -222,26 +222,26 @@ if __name__ == "__main__":
     assert liver in [0, 1, 2], "Liver must be 0, 1, or 2."
     assert spleen in [0, 1, 2], "Spleen must be 0, 1, or 2."
     used_labels = {"bowel": bowel, "extravasation": extravasation, "kidney": kidney, "liver": liver, "spleen": spleen}
-    out_classes = [] # output label heads depend on used labels
+    out_classes = {} # output label heads depend on used labels
     if bowel:
-        out_classes.append(1)
+        out_classes["bowel"] = 1
     if extravasation:
-        out_classes.append(1)
+        out_classes["extravasation"] = 1
     if kidney > 0:
         if kidney == 1:
-            out_classes.append(1)
+            out_classes["kidney"] = 1
         else:
-            out_classes.append(3)
+            out_classes["kidney"] = 3
     if liver > 0:
         if liver == 1:
-            out_classes.append(1)
+            out_classes["liver"] = 1
         else:
-            out_classes.append(3)
+            out_classes["liver"] = 3
     if spleen > 0:
         if spleen == 1:
-            out_classes.append(1)
+            out_classes["spleen"] = 1
         else:
-            out_classes.append(3)
+            out_classes["spleen"] = 3
 
     # obtain model and training parameters
     epochs = args.epochs
@@ -396,7 +396,7 @@ if __name__ == "__main__":
     val_metrics["loss"] = metrics.NumericalMetric(name="val_loss")
 
     # Compile
-    single_training_step_compile = torch.compile(single_training_step)
+    single_training_step_compile = single_training_step #torch.compile(single_training_step)
 
     # Start training loop
     print("Training for {} epochs......".format(epochs))

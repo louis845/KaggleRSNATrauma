@@ -70,7 +70,6 @@ class ImageLoaderWorker:
     def __init__(self, worker_name: str, num_slices=15, image_width=640, image_height=640):
         self.image_width = image_width
         self.image_height = image_height
-
         image_loading_pipe_recv, self.image_loading_pipe_send = multiprocessing.Pipe(duplex=False)
         self.running = multiprocessing.Value(ctypes.c_bool, True)
         self.image_available_lock = multiprocessing.Lock()
@@ -121,7 +120,7 @@ class ImageSamplerAsync:
 
         self.workers = []
         for k in range(max_batch_size):
-            self.workers.append(ImageLoaderWorker("worker_{}".format(k), image_width, image_height))
+            self.workers.append(ImageLoaderWorker("worker_{}".format(k), image_width=image_width, image_height=image_height))
 
     def get_data_from_worker(self, worker_idx: int):
         img_data = self.workers[worker_idx].get_requested_image()

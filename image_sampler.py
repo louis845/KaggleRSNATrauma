@@ -56,10 +56,10 @@ def load_image(patient_id: str, series_id: str, slices=15, slices_random=False, 
 
             # randomly pick slices
             if slices_random:
-                dist = np.min(np.diff(slices_pos)) // 2
-                slices_pos = slices_pos + np.random.randint(-dist, dist + 1, size=slices)
-                slices_pos = np.clip(np.sort(slices_pos), 0, total_slices - 1)
-
+                dist = (np.min(np.diff(slices_pos)) // 2) - 1
+                if dist > 1:
+                    slices_pos = slices_pos + np.random.randint(-dist, dist + 1, size=slices)
+                    slices_pos = np.clip(np.sort(slices_pos), 0, total_slices - 1)
             image = ct_3D_image[slices_pos, :, :]
             image = torch.from_numpy(image).to(torch.float32)
 
