@@ -8,12 +8,12 @@ import config
 
 def compute_max_angle(height: int, width: int):
     diagonal = np.sqrt(float(height ** 2 + width ** 2))
-    if diagonal <= 640:
+    if diagonal <= 630:
         max_h_angle = np.pi / 2
         max_w_angle = 0.0
     else:
-        max_h_angle = np.arcsin(640 / diagonal)
-        max_w_angle = np.arccos(640 / diagonal)
+        max_h_angle = np.arcsin(630 / diagonal)
+        max_w_angle = np.arccos(630 / diagonal)
 
     diag_angle = np.arctan2(height, width)
 

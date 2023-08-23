@@ -11,7 +11,7 @@ for k in range(len(ground_truth_hash)):
     patient_id = ground_truth_hash["patient_id"][k]
     series_id = ground_truth_hash["series_id"][k]
     sha1sum = ground_truth_hash["sha1sum"][k]
-    hash_dict[(patient_id, series_id)] = sha1sum
+    hash_dict[(str(patient_id), str(series_id))] = sha1sum
 
 problem_info = {"patient_id": [], "series_id": [], "problem": []}
 for patient_id in tqdm.tqdm(os.listdir("data_hdf5")):
