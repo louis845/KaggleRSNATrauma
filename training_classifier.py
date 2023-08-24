@@ -133,7 +133,10 @@ def training_step(record:bool):
             train_history[key].append(current_metrics[key])
 
 def validation_step():
-    # training
+    for key in val_metrics:
+        val_metrics[key].reset()
+
+    # validating
     validated = 0
     with tqdm.tqdm(total=len(validation_entries)) as pbar:
         with torch.no_grad():
@@ -295,7 +298,7 @@ if __name__ == "__main__":
     # Create model and optimizer
     model_resnet.BATCH_NORM_MOMENTUM = batch_norm_momentum
     backbone = model_resnet.ResNetBackbone(in_channels=1, hidden_channels=hidden_channels,
-                                           normalization_type="batchnorm", pyr_height=len(hidden_blocks),
+                                           normalization_type=model_resnet.INSTANCE_NORM, pyr_height=len(hidden_blocks),
                                            res_conv_blocks=hidden_blocks, bottleneck_factor=bottleneck_factor,
                                            squeeze_excitation=squeeze_excitation)
     neck = model_resnet.PatchAttnClassifierNeck(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),

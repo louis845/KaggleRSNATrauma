@@ -99,17 +99,17 @@ class TernaryMetrics(Metrics):
         self.fp += torch.sum((y_pred > 0) & (y_true == 0)).cpu().item()
         self.fn += torch.sum((y_pred == 0) & (y_true > 0)).cpu().item()
 
-        self.low_tp = torch.sum((y_pred == 1) & (y_true == 1)).cpu().item()
-        self.low_tn = torch.sum((y_pred != 1) & (y_true != 1)).cpu().item()
-        self.low_fp = torch.sum((y_pred == 1) & (y_true != 1)).cpu().item()
-        self.low_fn = torch.sum((y_pred != 1) & (y_true == 1)).cpu().item()
+        self.low_tp += torch.sum((y_pred == 1) & (y_true == 1)).cpu().item()
+        self.low_tn += torch.sum((y_pred != 1) & (y_true != 1)).cpu().item()
+        self.low_fp += torch.sum((y_pred == 1) & (y_true != 1)).cpu().item()
+        self.low_fn += torch.sum((y_pred != 1) & (y_true == 1)).cpu().item()
 
-        self.high_tp = torch.sum((y_pred == 2) & (y_true == 2)).cpu().item()
-        self.high_tn = torch.sum((y_pred != 2) & (y_true != 2)).cpu().item()
-        self.high_fp = torch.sum((y_pred == 2) & (y_true != 2)).cpu().item()
-        self.high_fn = torch.sum((y_pred != 2) & (y_true == 2)).cpu().item()
+        self.high_tp += torch.sum((y_pred == 2) & (y_true == 2)).cpu().item()
+        self.high_tn += torch.sum((y_pred != 2) & (y_true != 2)).cpu().item()
+        self.high_fp += torch.sum((y_pred == 2) & (y_true != 2)).cpu().item()
+        self.high_fn += torch.sum((y_pred != 2) & (y_true == 2)).cpu().item()
 
-        self.correct = torch.sum(y_pred == y_true).cpu().item()
+        self.correct += torch.sum(y_pred == y_true).cpu().item()
 
     def get(self):
         """Compute the accuracy, precision, recall."""
