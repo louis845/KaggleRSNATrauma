@@ -29,19 +29,19 @@ def add_argparse_arguments(parser: argparse.ArgumentParser):
     parser.add_argument("--train_data", type=str, required=True)
     parser.add_argument("--val_data", type=str, required=True)
 
-def parse_args(args: argparse.Namespace) -> tuple[list[int], list[int]]:
-    train_data = args.train_data
-    val_data = args.val_data
-    assert dataset_exists(train_data)
-    assert dataset_exists(val_data)
+def parse_args(args: argparse.Namespace) -> tuple[list[int], list[int], str, str]:
+    train_data_name = args.train_data
+    val_data_name = args.val_data
+    assert dataset_exists(train_data_name)
+    assert dataset_exists(val_data_name)
 
-    train_data = load_dataset(train_data)
-    val_data = load_dataset(val_data)
+    train_data = load_dataset(train_data_name)
+    val_data = load_dataset(val_data_name)
 
     # assert that they are disjoint
     assert len(set(train_data).intersection(set(val_data))) == 0
 
-    return train_data, val_data
+    return train_data, val_data, train_data_name, val_data_name
 
 def get_summarization(body_part: str):
     assert body_part in ["bowel", "extravasation", "kidney", "liver", "spleen"]

@@ -23,6 +23,20 @@ import manager_models
 import model_resnet
 import metrics
 
+def optimization_loss(probas: torch.Tensor, ground_truth_labels: torch.Tensor, is_binary: bool):
+    if is_binary:
+        gt_float = ground_truth_labels.to(torch.float32)
+        if positive_weight is not None:
+            return torch.sum((gt_float * positive_weight + 1) *
+                             torch.nn.functional.binary_cross_entropy(probas, gt_float, reduction="none"))
+        else:
+            return torch.nn.functional.binary_cross_entropy(probas, gt_float, reduction="sum")
+    else:
+        return torch.nn.functional.nll_loss(torch.log(torch.clamp(probas, min=1e-10)), ground_truth_labels, reduction="sum")
+
+def target_loss(probas: torch.Tensor, ground_truth_labels: torch.Tensor, is_binary: bool):
+    pass
+
 def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
                          img_sample_batch_: torch.Tensor, labels_batch_: dict[str, torch.Tensor]):
     optimizer_.zero_grad()
@@ -33,10 +47,10 @@ def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimi
     for key in labels_batch_:
         gt = labels_batch_[key]
         if is_label_binary(key, used_labels):
-            losses[key] = torch.nn.functional.binary_cross_entropy(probas[key], gt.to(torch.float32), reduction="sum")
+            losses[key] = optimization_loss(probas[key], gt, is_binary=True)
             preds[key] = (probas[key] > 0.5).to(torch.long)
         else:
-            losses[key] = torch.nn.functional.nll_loss(torch.log(probas[key]), gt, reduction="sum")
+            losses[key] = optimization_loss(probas[key], gt, is_binary=False)
             preds[key] = torch.argmax(probas[key], dim=1)
         loss = loss + losses[key]
     loss.backward()
@@ -52,10 +66,10 @@ def single_validation_step(model_: torch.nn.Module, img_sample_batch_: torch.Ten
     for key in labels_batch_:
         gt = labels_batch_[key]
         if is_label_binary(key, used_labels):
-            losses[key] = torch.nn.functional.binary_cross_entropy(probas[key], gt.to(torch.float32), reduction="sum")
+            losses[key] = optimization_loss(probas[key], gt, is_binary=True)
             preds[key] = (probas[key] > 0.5).to(torch.long)
         else:
-            losses[key] = torch.nn.functional.nll_loss(torch.log(probas[key]), gt, reduction="sum")
+            losses[key] = optimization_loss(probas[key], gt, is_binary=False)
             preds[key] = torch.argmax(probas[key], dim=1)
         loss = loss + losses[key]
     return preds, loss.item(), {key: losses[key].item() for key in losses}
@@ -186,6 +200,7 @@ if __name__ == "__main__":
     parser.add_argument("--squeeze_excitation", action="store_false", help="Whether to use squeeze and excitation. Default True.")
     parser.add_argument("--key_dim", type=int, default=8, help="The key dimension for the attention head. Default 8.")
     parser.add_argument("--proba_head", type=str, default="mean", help="The type of probability head to use. Available options: mean, union. Default mean.")
+    parser.add_argument("--positive_weight", type=float, default=None, help="The extra weight to use for positive labels, zero for equal weights. Default None.")
     parser.add_argument("--num_extra_steps", type=int, default=0, help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
     parser.add_argument("--async_sampler", action="store_true", help="Whether to use the asynchronous sampler. Default False.")
     parser.add_argument("--bowel", action="store_true", help="Whether to use the bowel labels. Default False.")
@@ -202,11 +217,13 @@ if __name__ == "__main__":
     config.parse_args(args)
 
     # check entries
-    training_entries, validation_entries = manager_folds.parse_args(args)
+    training_entries, validation_entries, train_dset_name, val_dset_name = manager_folds.parse_args(args)
     assert type(training_entries) == list
     assert type(validation_entries) == list
     training_entries = np.array(training_entries)
     validation_entries = np.array(validation_entries)
+    print("Training dataset: {}".format(train_dset_name))
+    print("Validation dataset: {}".format(val_dset_name))
 
     # get model directories
     model_dir, prev_model_dir = manager_models.parse_args(args)
@@ -258,6 +275,7 @@ if __name__ == "__main__":
     squeeze_excitation = args.squeeze_excitation
     key_dim = args.key_dim
     proba_head = args.proba_head
+    positive_weight = args.positive_weight
     num_extra_steps = args.num_extra_steps
     async_sampler = args.async_sampler
 
@@ -271,6 +289,8 @@ if __name__ == "__main__":
     print("Bottleneck factor: " + str(bottleneck_factor))
     print("Key dimension: " + str(key_dim))
     print("Squeeze and excitation: " + str(squeeze_excitation))
+    print("Probability head: " + str(proba_head))
+    print("Positive weight: " + str(positive_weight))
 
     # Create model and optimizer
     model_resnet.BATCH_NORM_MOMENTUM = batch_norm_momentum
@@ -334,9 +354,12 @@ if __name__ == "__main__":
         "squeeze_excitation": squeeze_excitation,
         "key_dim": key_dim,
         "proba_head": proba_head,
+        "positive_weight": positive_weight,
         "num_extra_steps": num_extra_steps,
         "async_sampler": async_sampler,
         "labels": used_labels,
+        "train_dataset": train_dset_name,
+        "val_dataset": val_dset_name,
         "training_script": "training_classifier.py",
     }
 
