@@ -159,7 +159,7 @@ def training_step(record:bool):
         for key in train_metrics:
             train_metrics[key].write_to_dict(current_metrics)
             if key.endswith("loss"):
-                losses.append(current_metrics[key])
+                losses.append(train_metrics[key].get())
         current_metrics["train_loss"] = np.mean(losses)
 
         for key in current_metrics:
@@ -204,7 +204,7 @@ def validation_step():
     for key in val_metrics:
         val_metrics[key].write_to_dict(current_metrics)
         if key.endswith("loss"):
-            losses.append(current_metrics[key])
+            losses.append(val_metrics[key].get())
     current_metrics["val_loss"] = np.mean(losses)
 
     for key in current_metrics:
@@ -412,7 +412,6 @@ if __name__ == "__main__":
         sampler = image_sampler.ImageSampler()
 
     # Create the metrics
-    global train_history, train_metrics, val_history, val_metrics
     train_history = collections.defaultdict(list)
     train_metrics = {}
     val_history = collections.defaultdict(list)
@@ -456,7 +455,7 @@ if __name__ == "__main__":
         val_metrics["spleen_loss"] = metrics.NumericalMetric(name="val_spleen_loss")
 
     # Compile
-    single_training_step_compile = torch.compile(single_training_step)
+    single_training_step_compile = single_training_step#torch.compile(single_training_step)
 
     # Start training loop
     print("Training for {} epochs......".format(epochs))
