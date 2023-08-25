@@ -455,7 +455,7 @@ if __name__ == "__main__":
         val_metrics["spleen_loss"] = metrics.NumericalMetric(name="val_spleen_loss")
 
     # Compile
-    single_training_step_compile = single_training_step#torch.compile(single_training_step)
+    single_training_step_compile = torch.compile(single_training_step)
 
     # Start training loop
     print("Training for {} epochs......".format(epochs))
