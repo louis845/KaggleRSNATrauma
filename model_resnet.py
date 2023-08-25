@@ -257,7 +257,7 @@ class ResNetBackbone(torch.nn.Module):
         return ret
 
 class PatchAttnClassifierNeck(torch.nn.Module):
-    def __init__(self, channels, out_classes={"label": 1}, key_dim=8):
+    def __init__(self, channels, out_classes={"label": 1}, key_dim=8, normalization_type=INSTANCE_NORM):
         super(PatchAttnClassifierNeck, self).__init__()
 
         self.channels = channels
@@ -271,6 +271,10 @@ class PatchAttnClassifierNeck(torch.nn.Module):
         self.spatch_pool = torch.nn.AvgPool3d(kernel_size=(1, 3, 3), stride=1, padding=0)
         self.key = torch.nn.Conv3d(channels, key_dim * self.num_outs, kernel_size=1, bias=False)
         self.value = torch.nn.Conv3d(channels, channels * self.num_outs, kernel_size=1, bias=False)
+        if normalization_type == BATCH_NORM:
+            self.value_norm = torch.nn.BatchNorm3d(channels * self.num_outs, momentum=BATCH_NORM_MOMENTUM)
+        else:
+            self.value_norm = torch.nn.InstanceNorm2d(channels * self.num_outs, affine=True)
 
         self.nonlinearity = torch.nn.GELU()
         self.outconvs = torch.nn.ModuleList()
@@ -279,6 +283,7 @@ class PatchAttnClassifierNeck(torch.nn.Module):
             self.out_id_to_key.append(key)
 
         self.temperature = torch.sqrt(torch.tensor(1.0 / key_dim))
+        self.normalization_type = normalization_type
 
     def forward(self, x):
         x = x[-1]
@@ -295,6 +300,15 @@ class PatchAttnClassifierNeck(torch.nn.Module):
         value = self.value(x)
         assert key.shape == (N, self.num_outs * self.key_dim, D, H, W)
         assert value.shape == (N, self.num_outs * self.channels, D, H, W)
+
+        if self.normalization_type == BATCH_NORM:
+            value = self.value_norm(value)
+        else:
+            value = value.permute(0, 2, 1, 3, 4)
+            value = value.view(N * D, self.num_outs * self.channels, H, W)
+            value = self.value_norm(value)
+            value = value.view(N, D, self.num_outs * self.channels, H, W)
+            value = value.permute(0, 2, 1, 3, 4)
 
         query = query.view(N, self.num_outs, self.key_dim, D, 1)
         key = key.view(N, self.num_outs, self.key_dim, D, H * W)
