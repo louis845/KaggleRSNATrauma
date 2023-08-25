@@ -23,16 +23,25 @@ import manager_models
 import model_resnet
 import metrics
 
-def optimization_loss(probas: torch.Tensor, ground_truth_labels: torch.Tensor, is_binary: bool):
+train_history, train_metrics, val_history, val_metrics = None, None, None, None
+ternary_collapsed_binary_weight = None
+ternary_weight = None
+bowel_weight = None
+extravasation_weight = None
+any_injury_weight = None
+
+def optimization_loss(probas: torch.Tensor, ground_truth_labels: torch.Tensor, is_binary: bool, weights: torch.Tensor):
     if is_binary:
         gt_float = ground_truth_labels.to(torch.float32)
-        if positive_weight is not None:
-            return torch.sum((gt_float * positive_weight + 1) *
-                             torch.nn.functional.binary_cross_entropy(probas, gt_float, reduction="none"))
-        else:
-            return torch.nn.functional.binary_cross_entropy(probas, gt_float, reduction="sum")
+        sample_weights = gt_float * weights + 1
+        return torch.sum(sample_weights *
+                         torch.nn.functional.binary_cross_entropy(probas, gt_float, reduction="none")), torch.sum(sample_weights).item()
     else:
-        return torch.nn.functional.nll_loss(torch.log(torch.clamp(probas, min=1e-10)), ground_truth_labels, reduction="sum")
+        gt_one_hot = torch.nn.functional.one_hot(ground_truth_labels, num_classes=3).to(torch.float32)
+        sample_weights = gt_one_hot * weights
+        return torch.sum(sample_weights *
+                         torch.nn.functional.nll_loss(torch.log(torch.clamp(probas, min=1e-10)),
+                                                      ground_truth_labels, reduction="none")), torch.sum(sample_weights).item()
 
 def target_loss(probas: torch.Tensor, ground_truth_labels: torch.Tensor, is_binary: bool):
     pass
@@ -46,17 +55,28 @@ def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimi
     loss = 0
     for key in labels_batch_:
         gt = labels_batch_[key]
+        if key == "bowel":
+            weights = bowel_weight
+        elif key == "extravasation":
+            weights = extravasation_weight
+        else:
+            if is_label_binary(key, used_labels):
+                weights = ternary_collapsed_binary_weight
+            else:
+                weights = ternary_weight
         if is_label_binary(key, used_labels):
-            losses[key] = optimization_loss(probas[key], gt, is_binary=True)
+            opt_loss, weight_sum = optimization_loss(probas[key], gt, is_binary=True, weights=weights)
+            losses[key] = {"loss": opt_loss, "weight_sum": weight_sum}
             preds[key] = (probas[key] > 0.5).to(torch.long)
         else:
-            losses[key] = optimization_loss(probas[key], gt, is_binary=False)
+            opt_loss, weight_sum = optimization_loss(probas[key], gt, is_binary=False, weights=weights)
+            losses[key] = {"loss": opt_loss, "weight_sum": weight_sum}
             preds[key] = torch.argmax(probas[key], dim=1)
-        loss = loss + losses[key]
+        loss = loss + losses[key]["loss"]
     loss.backward()
     optimizer.step()
 
-    return preds, loss.item(), {key: losses[key].item() for key in losses}
+    return preds, {key: {"loss":losses[key]["loss"].item(), "weight_sum":losses[key]["weight_sum"]} for key in losses}
 
 def single_validation_step(model_: torch.nn.Module, img_sample_batch_: torch.Tensor, labels_batch_: dict[str, torch.Tensor]):
     probas = model_(img_sample_batch_)
@@ -65,14 +85,26 @@ def single_validation_step(model_: torch.nn.Module, img_sample_batch_: torch.Ten
     loss = 0
     for key in labels_batch_:
         gt = labels_batch_[key]
+        if key == "bowel":
+            weights = bowel_weight
+        elif key == "extravasation":
+            weights = extravasation_weight
+        else:
+            if is_label_binary(key, used_labels):
+                weights = ternary_collapsed_binary_weight
+            else:
+                weights = ternary_weight
         if is_label_binary(key, used_labels):
-            losses[key] = optimization_loss(probas[key], gt, is_binary=True)
+            opt_loss, weight_sum = optimization_loss(probas[key], gt, is_binary=True, weights=weights)
+            losses[key] = {"loss": opt_loss, "weight_sum": weight_sum}
             preds[key] = (probas[key] > 0.5).to(torch.long)
         else:
-            losses[key] = optimization_loss(probas[key], gt, is_binary=False)
+            opt_loss, weight_sum = optimization_loss(probas[key], gt, is_binary=False, weights=weights)
+            losses[key] = {"loss": opt_loss, "weight_sum": weight_sum}
             preds[key] = torch.argmax(probas[key], dim=1)
-        loss = loss + losses[key]
-    return preds, loss.item(), {key: losses[key].item() for key in losses}
+        loss = loss + losses[key]["loss"]
+
+    return preds, {key: {"loss": losses[key]["loss"].item(), "weight_sum": losses[key]["weight_sum"]} for key in losses}
 
 def labels_to_tensor(labels: dict[str, np.ndarray]):
     labels_tensor = {}
@@ -100,7 +132,7 @@ def training_step(record:bool):
             img_data_batch = sampler.obtain_sample_batch(patient_ids, series_ids, slices_random=True, augmentation=True)
             ground_truth_labels_batch = labels_to_tensor(manager_folds.get_patient_status_labels(patient_ids, used_labels))
 
-            preds, loss, individual_losses = single_training_step_compile(model, optimizer, img_data_batch, ground_truth_labels_batch)
+            preds, individual_losses = single_training_step_compile(model, optimizer, img_data_batch, ground_truth_labels_batch)
 
             # record
             if record:
@@ -108,12 +140,9 @@ def training_step(record:bool):
                 with torch.no_grad():
                     for key in train_metrics:
                         if key.endswith("loss"):
-                            if key == "loss":
-                                train_metrics[key].add(loss, current_size)
-                            else:
-                                organ = key[:-5]
-                                organ_loss = individual_losses[organ]
-                                train_metrics[key].add(organ_loss, current_size)
+                            organ = key[:-5]
+                            organ_loss = individual_losses[organ]
+                            train_metrics[key].add(organ_loss["loss"], organ_loss["weight_sum"])
                         else:
                             organ = key
                             pred = preds[organ]
@@ -126,8 +155,12 @@ def training_step(record:bool):
 
     if record:
         current_metrics = {}
+        losses = []
         for key in train_metrics:
             train_metrics[key].write_to_dict(current_metrics)
+            if key.endswith("loss"):
+                losses.append(current_metrics[key])
+        current_metrics["train_loss"] = np.mean(losses)
 
         for key in current_metrics:
             train_history[key].append(current_metrics[key])
@@ -148,18 +181,15 @@ def validation_step():
                 img_data_batch = sampler.obtain_sample_batch(patient_ids, series_ids, slices_random=False, augmentation=False)
                 ground_truth_labels_batch = labels_to_tensor(manager_folds.get_patient_status_labels(patient_ids, used_labels))
 
-                preds, loss, individual_losses = single_validation_step(model, img_data_batch, ground_truth_labels_batch)
+                preds, individual_losses = single_validation_step(model, img_data_batch, ground_truth_labels_batch)
 
                 # compute metrics
                 with torch.no_grad():
                     for key in val_metrics:
                         if key.endswith("loss"):
-                            if key == "loss":
-                                val_metrics[key].add(loss, current_size)
-                            else:
-                                organ = key[:-5]
-                                organ_loss = individual_losses[organ]
-                                val_metrics[key].add(organ_loss, current_size)
+                            organ = key[:-5]
+                            organ_loss = individual_losses[organ]
+                            val_metrics[key].add(organ_loss["loss"], organ_loss["weight_sum"])
                         else:
                             organ = key
                             pred = preds[organ]
@@ -170,8 +200,12 @@ def validation_step():
                 pbar.update(current_size)
 
     current_metrics = {}
+    losses = []
     for key in val_metrics:
         val_metrics[key].write_to_dict(current_metrics)
+        if key.endswith("loss"):
+            losses.append(current_metrics[key])
+    current_metrics["val_loss"] = np.mean(losses)
 
     for key in current_metrics:
         val_history[key].append(current_metrics[key])
@@ -203,7 +237,6 @@ if __name__ == "__main__":
     parser.add_argument("--squeeze_excitation", action="store_false", help="Whether to use squeeze and excitation. Default True.")
     parser.add_argument("--key_dim", type=int, default=8, help="The key dimension for the attention head. Default 8.")
     parser.add_argument("--proba_head", type=str, default="mean", help="The type of probability head to use. Available options: mean, union. Default mean.")
-    parser.add_argument("--positive_weight", type=float, default=None, help="The extra weight to use for positive labels, zero for equal weights. Default None.")
     parser.add_argument("--num_extra_steps", type=int, default=0, help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
     parser.add_argument("--async_sampler", action="store_true", help="Whether to use the asynchronous sampler. Default False.")
     parser.add_argument("--bowel", action="store_true", help="Whether to use the bowel labels. Default False.")
@@ -216,8 +249,13 @@ if __name__ == "__main__":
     config.add_argparse_arguments(parser)
     args = parser.parse_args()
 
-    # set device
+    # set device, and initialize weights
     config.parse_args(args)
+    ternary_collapsed_binary_weight = torch.tensor(2.0, dtype=torch.float32, device=config.device) # 2 + 1 = 3 = (2 + 4) / 2
+    ternary_weight = torch.tensor([1.0, 2.0, 4.0], dtype=torch.float32, device=config.device)
+    bowel_weight = torch.tensor(1.0, dtype=torch.float32, device=config.device) # 1 + 1 = 2
+    extravasation_weight = torch.tensor(5.0, dtype=torch.float32, device=config.device) # 5 + 1 = 6
+    any_injury_weight = torch.tensor(5.0, dtype=torch.float32, device=config.device) # 5 + 1 = 6
 
     # check entries
     training_entries, validation_entries, train_dset_name, val_dset_name = manager_folds.parse_args(args)
@@ -278,7 +316,6 @@ if __name__ == "__main__":
     squeeze_excitation = args.squeeze_excitation
     key_dim = args.key_dim
     proba_head = args.proba_head
-    positive_weight = args.positive_weight
     num_extra_steps = args.num_extra_steps
     async_sampler = args.async_sampler
 
@@ -293,7 +330,6 @@ if __name__ == "__main__":
     print("Key dimension: " + str(key_dim))
     print("Squeeze and excitation: " + str(squeeze_excitation))
     print("Probability head: " + str(proba_head))
-    print("Positive weight: " + str(positive_weight))
 
     # Create model and optimizer
     model_resnet.BATCH_NORM_MOMENTUM = batch_norm_momentum
@@ -357,7 +393,6 @@ if __name__ == "__main__":
         "squeeze_excitation": squeeze_excitation,
         "key_dim": key_dim,
         "proba_head": proba_head,
-        "positive_weight": positive_weight,
         "num_extra_steps": num_extra_steps,
         "async_sampler": async_sampler,
         "labels": used_labels,
@@ -370,6 +405,7 @@ if __name__ == "__main__":
     with open(os.path.join(model_dir, "config.json"), "w") as f:
         json.dump(model_config, f, indent=4)
 
+    print("Using asynchronous sampler: " + str(async_sampler))
     if async_sampler:
         sampler = image_sampler_async.ImageSamplerAsync(max_batch_size=batch_size, device=config.device)
     else:
@@ -418,8 +454,6 @@ if __name__ == "__main__":
             val_metrics["spleen"] = metrics.TernaryMetrics(name="val_spleen")
         train_metrics["spleen_loss"] = metrics.NumericalMetric(name="train_spleen_loss")
         val_metrics["spleen_loss"] = metrics.NumericalMetric(name="val_spleen_loss")
-    train_metrics["loss"] = metrics.NumericalMetric(name="train_loss")
-    val_metrics["loss"] = metrics.NumericalMetric(name="val_loss")
 
     # Compile
     single_training_step_compile = torch.compile(single_training_step)

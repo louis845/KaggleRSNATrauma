@@ -284,10 +284,10 @@ class PatchAttnClassifierNeck(torch.nn.Module):
         x = x[-1]
         query = self.query(torch.mean(x, dim=(-1, -2), keepdim=True))
         assert query.shape == (x.shape[0], self.num_outs * self.key_dim, x.shape[2], 1, 1)
-
-        x = self.spatch_pool(x)
         N = x.shape[0]
         D = x.shape[2]
+
+        x = self.spatch_pool(x)
         H = x.shape[3]
         W = x.shape[4]
 

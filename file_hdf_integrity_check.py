@@ -38,3 +38,10 @@ problem_info = pd.DataFrame(problem_info)
 # save to integrity_check/<current_time>.csv
 problem_info.to_csv(os.path.join("integrity_check", "hdf_" + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".csv"),
                     index=False)
+
+# if there is any problem, exit with code -1
+if problem_info["problem"].any():
+    print("Not all ok!")
+    exit(-1)
+print("All ok.")
+exit(0)
