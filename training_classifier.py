@@ -338,7 +338,7 @@ if __name__ == "__main__":
                                            res_conv_blocks=hidden_blocks, bottleneck_factor=bottleneck_factor,
                                            squeeze_excitation=squeeze_excitation)
     neck = model_resnet.PatchAttnClassifierNeck(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),
-                                                key_dim=key_dim, out_classes=out_classes)
+                                                key_dim=key_dim, out_classes=out_classes, normalization_type=model_resnet.INSTANCE_NORM)
     if proba_head == "mean":
         head = model_resnet.MeanProbaReductionHead(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),
                                                     out_classes=out_classes)
