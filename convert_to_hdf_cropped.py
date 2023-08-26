@@ -5,6 +5,7 @@ import tqdm
 import cv2
 import pandas as pd
 import torch
+import h5py
 
 import convert_to_npy
 
@@ -44,7 +45,8 @@ if __name__ == "__main__":
             if not os.path.exists(hdf_folder):
                 os.makedirs(hdf_folder)
 
-            np.save(os.path.join(hdf_folder, "ct_3D_image.npy"), ct_3D_image)
+            with h5py.File(os.path.join(hdf_folder, "ct_3D_image.hdf5"), "w") as f:
+                f.create_dataset("ct_3D_image", data=ct_3D_image, dtype=np.float16, compression="gzip", compression_opts=0)
             np.save(os.path.join(hdf_folder, "z_positions.npy"), z_positions)
 
             shape_info["patient_id"].append(patient_id)
