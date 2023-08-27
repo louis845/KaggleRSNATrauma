@@ -56,4 +56,4 @@ if __name__ == "__main__":
             shape_info["z_positions"].append(str(list(z_positions)))
 
     shape_info = pd.DataFrame(shape_info)
-    shape_info.to_csv("data_hdf_cropped/shape_info.csv", index=False)
+    shape_info.to_csv("data_hdf5_cropped/shape_info.csv", index=False)
