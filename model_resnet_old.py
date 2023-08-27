@@ -218,6 +218,21 @@ class ResNetBackbone(torch.nn.Module):
 
         return ret
 
+class FullyBinaryClassifier(torch.nn.Module):
+    def __init__(self, backbone: torch.nn.Module, channels):
+        super(FullyBinaryClassifier, self).__init__()
+        self.backbone = backbone
+        self.global_avg_pool = torch.nn.AdaptiveAvgPool2d(1)
+        self.outconv = torch.nn.Conv2d(channels, 1, kernel_size=1, bias=True)
+
+    def forward(self, x):
+        x = self.backbone(x)
+        x = x[-1]
+        x = self.global_avg_pool(x)
+        x = self.outconv(x)
+        return x.squeeze(-1).squeeze(-1).squeeze(-1)
+
+
 class FullClassifier(torch.nn.Module):
     def __init__(self, backbone: torch.nn.Module, neck: torch.nn.Module, head: torch.nn.Module):
         super(FullClassifier, self).__init__()
