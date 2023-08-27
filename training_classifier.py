@@ -21,6 +21,7 @@ import logging_memory_utils
 import manager_folds
 import manager_models
 import model_resnet
+import model_resnet_old
 import metrics
 
 train_history, train_metrics, val_history, val_metrics = None, None, None, None
@@ -132,7 +133,7 @@ def training_step(record:bool):
             img_data_batch = sampler.obtain_sample_batch(patient_ids, series_ids, slices_random=(not disable_random_slices), augmentation=(not disable_random_augmentation))
             ground_truth_labels_batch = labels_to_tensor(manager_folds.get_patient_status_labels(patient_ids, used_labels))
 
-            preds, individual_losses = single_training_step_compile(model, optimizer, img_data_batch, ground_truth_labels_batch)
+            preds, individual_losses = single_training_step_compile(model, optimizer, img_data_batch * 255, ground_truth_labels_batch)
 
             # record
             if record:
@@ -181,7 +182,7 @@ def validation_step():
                 img_data_batch = sampler.obtain_sample_batch(patient_ids, series_ids, slices_random=False, augmentation=False)
                 ground_truth_labels_batch = labels_to_tensor(manager_folds.get_patient_status_labels(patient_ids, used_labels))
 
-                preds, individual_losses = single_validation_step(model, img_data_batch, ground_truth_labels_batch)
+                preds, individual_losses = single_validation_step(model, img_data_batch * 255, ground_truth_labels_batch)
 
                 # compute metrics
                 with torch.no_grad():
@@ -241,6 +242,7 @@ if __name__ == "__main__":
     parser.add_argument("--key_dim", type=int, default=8, help="The key dimension for the attention head. Default 8.")
     parser.add_argument("--proba_head", type=str, default="mean", help="The type of probability head to use. Available options: mean, union. Default mean.")
     parser.add_argument("--use_average_pool_classifier", action="store_true", help="Whether to use average pooling for the classifier. Default False.")
+    parser.add_argument("--use_old_resnet", action="store_true", help="Whether to use the old 2D resnet backbone. Default False.")
     parser.add_argument("--num_extra_steps", type=int, default=0, help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
     parser.add_argument("--async_sampler", action="store_true", help="Whether to use the asynchronous sampler. Default False.")
     parser.add_argument("--bowel", action="store_true", help="Whether to use the bowel labels. Default False.")
@@ -324,6 +326,7 @@ if __name__ == "__main__":
     key_dim = args.key_dim
     proba_head = args.proba_head
     use_average_pool_classifier = args.use_average_pool_classifier
+    use_old_resnet = args.use_old_resnet
     num_extra_steps = args.num_extra_steps
     async_sampler = args.async_sampler
 
@@ -348,13 +351,21 @@ if __name__ == "__main__":
     print("Key dimension: " + str(key_dim))
     print("Squeeze and excitation: " + str(squeeze_excitation))
     print("Probability head: " + str(proba_head))
+    print("Use average pool classifier: " + str(use_average_pool_classifier))
+    print("Use old resnet: " + str(use_old_resnet))
 
     # Create model and optimizer
     model_resnet.BATCH_NORM_MOMENTUM = batch_norm_momentum
-    backbone = model_resnet.ResNetBackbone(in_channels=1, hidden_channels=hidden_channels,
-                                           normalization_type=model_resnet.INSTANCE_NORM, pyr_height=len(hidden_blocks),
-                                           res_conv_blocks=hidden_blocks, bottleneck_factor=bottleneck_factor,
-                                           squeeze_excitation=squeeze_excitation)
+    if use_old_resnet:
+        backbone = model_resnet_old.ResNetBackbone(in_channels=1, hidden_channels=hidden_channels // bottleneck_factor,
+                                               use_batch_norm=True, use_res_conv=True, pyr_height=len(hidden_blocks) - 1,
+                                               res_conv_blocks=hidden_blocks, bottleneck_expansion=bottleneck_factor,
+                                               squeeze_excitation=squeeze_excitation, use_initial_conv=True)
+    else:
+        backbone = model_resnet.ResNetBackbone(in_channels=1, hidden_channels=hidden_channels,
+                                               normalization_type=model_resnet.INSTANCE_NORM, pyr_height=len(hidden_blocks),
+                                               res_conv_blocks=hidden_blocks, bottleneck_factor=bottleneck_factor,
+                                               squeeze_excitation=squeeze_excitation)
     if use_average_pool_classifier:
         neck = model_resnet.AveragePoolClassifierNeck(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)), out_classes=out_classes)
     else:
@@ -366,7 +377,10 @@ if __name__ == "__main__":
     else:
         head = model_resnet.UnionProbaReductionHead(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),
                                                   out_classes=out_classes)
-    model = model_resnet.FullClassifier(backbone, neck, head)
+    if use_old_resnet:
+        model = model_resnet_old.FullClassifier(backbone, neck, head)
+    else:
+        model = model_resnet.FullClassifier(backbone, neck, head)
     model = model.to(config.device)
 
     print("Learning rate: " + str(learning_rate))
@@ -480,7 +494,7 @@ if __name__ == "__main__":
         val_metrics["spleen_loss"] = metrics.NumericalMetric(name="val_spleen_loss")
 
     # Compile
-    single_training_step_compile = torch.compile(single_training_step)
+    single_training_step_compile = single_training_step#torch.compile(single_training_step)
 
     # Start training loop
     print("Training for {} epochs......".format(epochs))

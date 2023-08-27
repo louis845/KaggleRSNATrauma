@@ -157,3 +157,32 @@ if __name__ == "__main__":
         for k, (train_idx, val_idx) in enumerate(kfold.split(summary, summary)):
             folds_data = summary.iloc[val_idx].index
             save_dataset("small_kidney_spleen_fold_{}".format(k), [int(patient_id) for patient_id in folds_data])
+
+    if not os.path.isfile("folds/tiny_kidney_train.json"):
+        train_ids = []
+        val_ids = []
+        num_train_kidney1 = 0
+        num_train_kidney0 = 0
+        num_val_kidney1 = 0
+        num_val_kidney0 = 0
+        idx = 0
+        while (num_val_kidney0 < 10) or (num_val_kidney1 < 10):
+            patient_id = patient_injuries.index[idx]
+            if patient_injuries["kidney_healthy"][patient_id] == 1:
+                if num_train_kidney1 < 10:
+                    train_ids.append(int(patient_id))
+                    num_train_kidney1 += 1
+                elif num_val_kidney1 < 10:
+                    val_ids.append(int(patient_id))
+                    num_val_kidney1 += 1
+            else:
+                if num_train_kidney0 < 10:
+                    train_ids.append(int(patient_id))
+                    num_train_kidney0 += 1
+                elif num_val_kidney0 < 10:
+                    val_ids.append(int(patient_id))
+                    num_val_kidney0 += 1
+            idx += 1
+
+        save_dataset("tiny_kidney_train", train_ids)
+        save_dataset("tiny_kidney_val", val_ids)
