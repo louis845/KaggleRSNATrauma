@@ -76,14 +76,14 @@ def load_image(patient_id: str, series_id: str, slices=15, slices_random=False, 
 
     return image.numpy()
 
-def obtain_sample_batch(patient_ids: list[str], series_ids: list[str], slices_random: bool, augmentation: bool):
+def obtain_sample_batch(patient_ids: list[str], series_ids: list[str], slices_random: bool, augmentation: bool, num_slices=15):
     assert len(patient_ids) == len(series_ids)
     batch_size = len(patient_ids)
 
     img_data_batch = torch.zeros((batch_size, 1, 15, 640, 640), dtype=torch.float32, device=config.device)
 
     for i in range(batch_size):
-        img_data = load_image(patient_ids[i], series_ids[i], slices=15,
+        img_data = load_image(patient_ids[i], series_ids[i], slices=num_slices,
                               slices_random=slices_random, augmentation=augmentation)
         img_data_batch[i, 0, ...].copy_(torch.from_numpy(img_data), non_blocking=True)
 
@@ -91,8 +91,11 @@ def obtain_sample_batch(patient_ids: list[str], series_ids: list[str], slices_ra
 
 # dummy class
 class ImageSampler:
+    def __init__(self, num_slices=15):
+        self.num_slices = num_slices
+
     def obtain_sample_batch(self, patient_ids: list[str], series_ids: list[str], slices_random: bool, augmentation: bool):
-        return obtain_sample_batch(patient_ids, series_ids, slices_random, augmentation)
+        return obtain_sample_batch(patient_ids, series_ids, slices_random, augmentation, num_slices=self.num_slices)
 
     def close(self):
         pass

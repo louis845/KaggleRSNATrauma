@@ -256,6 +256,30 @@ class ResNetBackbone(torch.nn.Module):
 
         return ret
 
+class AveragePoolClassifierNeck(torch.nn.Module):
+    def __init__(self, channels, out_classes={"label": 1}):
+        super(AveragePoolClassifierNeck, self).__init__()
+
+        self.channels = channels
+        self.out_classes = out_classes
+        self.num_outs = len(out_classes)
+        self.out_id_to_key = []
+
+        self.outconvs = torch.nn.ModuleList()
+        for key in out_classes:
+            self.outconvs.append(torch.nn.Conv3d(channels, out_classes[key], kernel_size=1, bias=True))
+            self.out_id_to_key.append(key)
+
+    def forward(self, x):
+        x = x[-1]
+        x = torch.mean(x, dim=(3, 4), keepdim=True)
+
+        outs = {}
+        for i in range(self.num_outs):
+            outs[self.out_id_to_key[i]] = self.outconvs[i](x)
+
+        return outs
+
 class PatchAttnClassifierNeck(torch.nn.Module):
     def __init__(self, channels, out_classes={"label": 1}, key_dim=8, normalization_type=INSTANCE_NORM):
         super(PatchAttnClassifierNeck, self).__init__()
@@ -279,7 +303,7 @@ class PatchAttnClassifierNeck(torch.nn.Module):
         self.nonlinearity = torch.nn.GELU()
         self.outconvs = torch.nn.ModuleList()
         for key in out_classes:
-            self.outconvs.append(torch.nn.Conv3d(channels, out_classes[key], kernel_size=1, bias=False))
+            self.outconvs.append(torch.nn.Conv3d(channels, out_classes[key], kernel_size=1, bias=True))
             self.out_id_to_key.append(key)
 
         self.temperature = torch.sqrt(torch.tensor(1.0 / key_dim))

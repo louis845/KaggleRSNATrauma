@@ -33,6 +33,7 @@ class RawCTViewer(QMainWindow):
         self.ct_folder = os.path.join("data", "train_images")
         self.ct_npy_folder = "data_npy"
         self.ct_hdf5_folder = "data_hdf5"
+        self.ct_hdf5_cropped_folder = "data_hdf5_cropped"
 
         self.setup_ui()
         self.setup_folders()
@@ -79,7 +80,7 @@ class RawCTViewer(QMainWindow):
 
         # Create a dropdown to toggle between dicom, rescaled_dicom, and npy
         self.image_options = QComboBox()
-        self.image_options.addItems(["dicom", "rescaled_dicom", "npy", "hdf5", "hdf5_sampler", "hdf5_sampler_async"])
+        self.image_options.addItems(["dicom", "rescaled_dicom", "npy", "hdf5", "hdf5_cropped", "hdf5_sampler", "hdf5_sampler_async"])
         # Create a matplotlib canvas to display the image
         self.fig = plt.figure()
         self.image_canvas = FigureCanvas(self.fig)
@@ -160,6 +161,7 @@ class RawCTViewer(QMainWindow):
         series_folder = os.path.join(self.ct_folder, patient_id, series_id)
         series_folder_npy = os.path.join(self.ct_npy_folder, patient_id, series_id)
         series_folder_hdf5 = os.path.join(self.ct_hdf5_folder, patient_id, series_id)
+        series_folder_hdf5_cropped = os.path.join(self.ct_hdf5_cropped_folder, patient_id, series_id)
         ct_scan_files = [int(dcm[:-4]) for dcm in os.listdir(series_folder)]
         ct_scan_files.sort()
 
@@ -232,6 +234,18 @@ class RawCTViewer(QMainWindow):
                 with h5py.File(os.path.join(series_folder_hdf5, "ct_3D_image.hdf5"), "r") as f:
                     self.ct_3D_image = f["ct_3D_image"][()]
                 self.z_positions = np.load(os.path.join(series_folder_hdf5, "z_positions.npy"))
+        elif self.image_options.currentText() == "hdf5_cropped":
+            print("Loading HDF5 data...")
+            # load from HDF5 file
+            if not os.path.isfile(os.path.join(series_folder_hdf5_cropped, "ct_3D_image.hdf5")):
+                # show dialog "HDF5 data not found. If you haven't generated the HDF5 files, please run convert_to_hdf5.py."
+                QMessageBox.information(self, "HDF5 data not found",
+                                        "HDF5 data not found. If you haven't generated the HDF5 files, please run convert_to_hdf5.py.")
+                return
+            else:
+                with h5py.File(os.path.join(series_folder_hdf5_cropped, "ct_3D_image.hdf5"), "r") as f:
+                    self.ct_3D_image = f["ct_3D_image"][()]
+                self.z_positions = np.load(os.path.join(series_folder_hdf5_cropped, "z_positions.npy"))
         elif self.image_options.currentText() == "hdf5_sampler":
             print("Loading HDF5 sampler data...")
             self.ct_3D_image = image_sampler.load_image(patient_id, series_id, slices_random=True, augmentation=True)

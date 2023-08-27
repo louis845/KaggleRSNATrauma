@@ -129,7 +129,7 @@ def training_step(record:bool):
             current_size = min(len(training_entries) - trained, batch_size)
             patient_ids = training_entries_shuffle[trained:trained + current_size] # patient ids
             series_ids = manager_folds.randomly_pick_series(patient_ids)
-            img_data_batch = sampler.obtain_sample_batch(patient_ids, series_ids, slices_random=True, augmentation=True)
+            img_data_batch = sampler.obtain_sample_batch(patient_ids, series_ids, slices_random=(not disable_random_slices), augmentation=(not disable_random_augmentation))
             ground_truth_labels_batch = labels_to_tensor(manager_folds.get_patient_status_labels(patient_ids, used_labels))
 
             preds, individual_losses = single_training_step_compile(model, optimizer, img_data_batch, ground_truth_labels_batch)
@@ -229,6 +229,9 @@ if __name__ == "__main__":
     parser.add_argument("--momentum", type=float, default=0.9, help="Momentum to use. Default 0.9. This would be the momentum for SGD, and beta1 for Adam.")
     parser.add_argument("--second_momentum", type=float, default=0.999, help="Second momentum to use. Default 0.999. This would be beta2 for Adam. Ignored if SGD.")
     parser.add_argument("--batch_norm_momentum", type=float, default=0.1, help="Batch normalization momentum to use. Default 0.1.")
+    parser.add_argument("--disable_random_slices", action="store_true", help="Whether to disable random slices. Default False.")
+    parser.add_argument("--disable_random_augmentation", action="store_true", help="Whether to disable random augmentation. Default False.")
+    parser.add_argument("--num_slices", type=int, default=15, help="Number of slices to use. Default 15.")
     parser.add_argument("--optimizer", type=str, default="adam", help="Which optimizer to use. Available options: adam, sgd. Default adam.")
     parser.add_argument("--epochs_per_save", type=int, default=2, help="Number of epochs between saves. Default 2.")
     parser.add_argument("--hidden_channels", type=int, default=16, help="Number of hidden channels to use. Default 64.")
@@ -308,6 +311,9 @@ if __name__ == "__main__":
     momentum = args.momentum
     second_momentum = args.second_momentum
     batch_norm_momentum = args.batch_norm_momentum
+    disable_random_slices = args.disable_random_slices
+    disable_random_augmentation = args.disable_random_augmentation
+    num_slices = args.num_slices
     optimizer_type = args.optimizer
     epochs_per_save = args.epochs_per_save
     hidden_channels = args.hidden_channels
@@ -318,6 +324,16 @@ if __name__ == "__main__":
     proba_head = args.proba_head
     num_extra_steps = args.num_extra_steps
     async_sampler = args.async_sampler
+
+    print("Epochs: " + str(epochs))
+    print("Batch size: " + str(batch_size))
+    print("Learning rate: " + str(learning_rate))
+    print("Momentum: " + str(momentum))
+    print("Second momentum: " + str(second_momentum))
+    print("Batch norm momentum: " + str(batch_norm_momentum))
+    print("Disable random slices: " + str(disable_random_slices))
+    print("Disable random augmentation: " + str(disable_random_augmentation))
+    print("Number of slices: " + str(num_slices))
 
     assert type(hidden_blocks) == list, "Blocks must be a list."
     for k in hidden_blocks:
@@ -385,6 +401,9 @@ if __name__ == "__main__":
         "momentum": momentum,
         "second_momentum": second_momentum,
         "batch_norm_momentum": batch_norm_momentum,
+        "disable_random_slices": disable_random_slices,
+        "disable_random_augmentation": disable_random_augmentation,
+        "num_slices": num_slices,
         "optimizer": optimizer_type,
         "epochs_per_save": epochs_per_save,
         "hidden_channels": hidden_channels,
@@ -407,9 +426,9 @@ if __name__ == "__main__":
 
     print("Using asynchronous sampler: " + str(async_sampler))
     if async_sampler:
-        sampler = image_sampler_async.ImageSamplerAsync(max_batch_size=batch_size, device=config.device)
+        sampler = image_sampler_async.ImageSamplerAsync(max_batch_size=batch_size, device=config.device, num_slices=num_slices)
     else:
-        sampler = image_sampler.ImageSampler()
+        sampler = image_sampler.ImageSampler(num_slices=num_slices)
 
     # Create the metrics
     train_history = collections.defaultdict(list)

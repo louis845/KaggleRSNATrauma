@@ -120,7 +120,7 @@ class ImageSamplerAsync:
 
         self.workers = []
         for k in range(max_batch_size):
-            self.workers.append(ImageLoaderWorker("worker_{}".format(k), image_width=image_width, image_height=image_height))
+            self.workers.append(ImageLoaderWorker("worker_{}".format(k), image_width=image_width, image_height=image_height, num_slices=num_slices))
 
     def get_data_from_worker(self, worker_idx: int):
         img_data = self.workers[worker_idx].get_requested_image()

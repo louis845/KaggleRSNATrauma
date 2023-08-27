@@ -151,3 +151,9 @@ if __name__ == "__main__":
             val_data = summary.iloc[val_idx].index
             save_dataset("kidney_spleen_train_fold_{}".format(k), [int(patient_id) for patient_id in train_data])
             save_dataset("kidney_spleen_val_fold_{}".format(k), [int(patient_id) for patient_id in val_data])
+    if not os.path.isfile("folds/small_kidney_spleen_fold_0.json"):
+        label_str, summary = get_summarization_string({"bowel": False, "extravasation": False, "kidney": True, "liver": False, "spleen": True})
+        kfold = StratifiedKFold(n_splits=20, shuffle=True)
+        for k, (train_idx, val_idx) in enumerate(kfold.split(summary, summary)):
+            folds_data = summary.iloc[val_idx].index
+            save_dataset("small_kidney_spleen_fold_{}".format(k), [int(patient_id) for patient_id in folds_data])
