@@ -446,7 +446,7 @@ if __name__ == "__main__":
 
     print("Using asynchronous sampler: " + str(async_sampler))
     if async_sampler:
-        sampler = image_sampler_async.ImageSamplerAsync(max_batch_size=batch_size, device=config.device, num_slices=num_slices)
+        sampler = image_sampler_async.ImageSamplerAsync(max_batch_size=batch_size, device=config.device, num_slices=num_slices, sampler_name=train_dset_name)
     else:
         sampler = image_sampler.ImageSampler(num_slices=num_slices)
 

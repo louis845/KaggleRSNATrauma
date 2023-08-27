@@ -107,7 +107,7 @@ class ImageSamplerAsync:
     """
     This class is responsible for sampling images from the dataset, as a batch of images in a torch tensor.
     """
-    def __init__(self, max_batch_size, num_slices=15, image_width=640, image_height=640, device: torch.device=config.device):
+    def __init__(self, max_batch_size, num_slices=15, image_width=640, image_height=640, device: torch.device=config.device, sampler_name="async"):
         self.closed = False
         self.device = device
         self.max_batch_size = max_batch_size
@@ -120,7 +120,7 @@ class ImageSamplerAsync:
 
         self.workers = []
         for k in range(max_batch_size):
-            self.workers.append(ImageLoaderWorker("worker_{}".format(k), image_width=image_width, image_height=image_height, num_slices=num_slices))
+            self.workers.append(ImageLoaderWorker("worker_{}_{}".format(k, sampler_name), image_width=image_width, image_height=image_height, num_slices=num_slices))
 
     def get_data_from_worker(self, worker_idx: int):
         img_data = self.workers[worker_idx].get_requested_image()
