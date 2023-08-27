@@ -240,6 +240,7 @@ if __name__ == "__main__":
     parser.add_argument("--squeeze_excitation", action="store_false", help="Whether to use squeeze and excitation. Default True.")
     parser.add_argument("--key_dim", type=int, default=8, help="The key dimension for the attention head. Default 8.")
     parser.add_argument("--proba_head", type=str, default="mean", help="The type of probability head to use. Available options: mean, union. Default mean.")
+    parser.add_argument("--use_average_pool_classifier", action="store_true", help="Whether to use average pooling for the classifier. Default False.")
     parser.add_argument("--num_extra_steps", type=int, default=0, help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
     parser.add_argument("--async_sampler", action="store_true", help="Whether to use the asynchronous sampler. Default False.")
     parser.add_argument("--bowel", action="store_true", help="Whether to use the bowel labels. Default False.")
@@ -322,6 +323,7 @@ if __name__ == "__main__":
     squeeze_excitation = args.squeeze_excitation
     key_dim = args.key_dim
     proba_head = args.proba_head
+    use_average_pool_classifier = args.use_average_pool_classifier
     num_extra_steps = args.num_extra_steps
     async_sampler = args.async_sampler
 
@@ -353,8 +355,11 @@ if __name__ == "__main__":
                                            normalization_type=model_resnet.INSTANCE_NORM, pyr_height=len(hidden_blocks),
                                            res_conv_blocks=hidden_blocks, bottleneck_factor=bottleneck_factor,
                                            squeeze_excitation=squeeze_excitation)
-    neck = model_resnet.PatchAttnClassifierNeck(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),
-                                                key_dim=key_dim, out_classes=out_classes, normalization_type=model_resnet.INSTANCE_NORM)
+    if use_average_pool_classifier:
+        neck = model_resnet.AveragePoolClassifierNeck(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)), out_classes=out_classes)
+    else:
+        neck = model_resnet.PatchAttnClassifierNeck(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),
+                                                    key_dim=key_dim, out_classes=out_classes, normalization_type=model_resnet.INSTANCE_NORM)
     if proba_head == "mean":
         head = model_resnet.MeanProbaReductionHead(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),
                                                     out_classes=out_classes)
@@ -412,6 +417,7 @@ if __name__ == "__main__":
         "squeeze_excitation": squeeze_excitation,
         "key_dim": key_dim,
         "proba_head": proba_head,
+        "use_average_pool_classifier": use_average_pool_classifier,
         "num_extra_steps": num_extra_steps,
         "async_sampler": async_sampler,
         "labels": used_labels,
