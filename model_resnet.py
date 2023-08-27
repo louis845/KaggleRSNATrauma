@@ -278,7 +278,7 @@ class AveragePoolClassifierNeck(torch.nn.Module):
         for i in range(self.num_outs):
             outs[self.out_id_to_key[i]] = self.outconvs[i](x)
 
-        return outs
+        return None, outs
 
 class PatchAttnClassifierNeck(torch.nn.Module):
     def __init__(self, channels, out_classes={"label": 1}, key_dim=8, normalization_type=INSTANCE_NORM):
