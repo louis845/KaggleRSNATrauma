@@ -2,6 +2,7 @@
 import os
 import traceback
 import pydicom
+import nibabel
 import numpy as np
 import cv2
 import h5py
@@ -19,6 +20,15 @@ import scan_preprocessing
 import image_sampler
 import image_sampler_async
 
+def convert_segmentation_to_color(segmentation_image: np.ndarray) -> np.ndarray:
+    """Convert a segmentation image to color, in hsv format"""
+    seg_float_32 = segmentation_image.astype(np.float32)
+    hue = (255.0 * seg_float_32 / 5.0).astype(np.uint8)
+    saturation = (seg_float_32 > 0).astype(np.uint8) * 255
+    value = (seg_float_32 > 0).astype(np.uint8) * 255
+    hsv_image = np.stack([hue, saturation, value], axis=-1)
+    return hsv_image
+
 class RawCTViewer(QMainWindow):
 
     series_ct: dict[str, list[str]] # Contains a list of CT scan series for each patient.
@@ -35,12 +45,15 @@ class RawCTViewer(QMainWindow):
         self.ct_hdf5_folder = "data_hdf5"
         self.ct_hdf5_cropped_folder = "data_hdf5_cropped"
 
+        self.segmentations_folder = os.path.join("data", "segmentations")
+
         self.setup_ui()
         self.setup_folders()
         self.setup_connections()
 
         self.ct_3D_image = None
         self.z_positions = None
+        self.segmentation_image = None
         self.min_series = None
         self.max_series = None
 
@@ -171,6 +184,8 @@ class RawCTViewer(QMainWindow):
         self.min_series = min_slice
         self.max_series = max_slice
 
+        self.ct_3D_image = None
+        self.segmentation_image = None
         # Load the data
         if self.image_options.currentText() == "dicom":
             print("Loading DICOM data...")
@@ -187,6 +202,13 @@ class RawCTViewer(QMainWindow):
                         dtype=np.uint8)
                 self.ct_3D_image[slice_number - min_slice, :, :] = (slice_array * 255).astype(np.uint8)
                 self.z_positions[slice_number - min_slice] = dcm_data[(0x20, 0x32)].value[-1]
+
+            segmentation_file = os.path.join(self.segmentations_folder, str(series_id) + ".nii")
+            if os.path.isfile(segmentation_file):
+                segmentation_image = np.array(nibabel.load(segmentation_file).get_fdata()).astype(np.uint8).transpose(2, 0, 1)
+                segmentation_image = segmentation_image[::-1, ...]
+                segmentation_image = np.rot90(segmentation_image, axes=(1, 2), k=1)
+                self.segmentation_image = convert_segmentation_to_color(segmentation_image)
         elif self.image_options.currentText() == "rescaled_dicom":
             print("Loading rescaled DICOM data...")
             # load from dicom file
@@ -280,8 +302,25 @@ class RawCTViewer(QMainWindow):
 
             # Plot it on the image canvas, which is a matplotlib widget. update self.fig. make sure to explicitly set size of the plot to equal to the size of the image
             self.fig.clear()
-            self.fig.set_size_inches(image.shape[1] / 100, image.shape[0] / 100)
-            self.fig.add_subplot(111).imshow(image, cmap="gray")
+            if self.segmentation_image is None:
+                self.fig.set_size_inches(image.shape[1] / 100, image.shape[0] / 100)
+                self.fig.add_subplot(1, 1, 1).imshow(image, cmap="gray")
+            else:
+                ax_ct = self.fig.add_subplot(1, 3, 1)
+                ax_ct.imshow(image, cmap="gray")
+
+                seg_img = self.segmentation_image[slice_number - self.min_series, ...]
+                seg_img = cv2.cvtColor(seg_img, cv2.COLOR_HSV2RGB)
+                ax_seg = self.fig.add_subplot(1, 3, 2)
+                ax_seg.imshow(seg_img)
+
+                ax_overlay = self.fig.add_subplot(1, 3, 3)
+                ax_overlay.imshow(image, cmap="gray")
+                ax_overlay.imshow(seg_img, alpha=0.5)
+
+                self.fig.set_size_inches(image.shape[1] / 100 * 3, image.shape[0] / 100)
+
+
             self.image_canvas.draw()
 
     def closeEvent(self, event):

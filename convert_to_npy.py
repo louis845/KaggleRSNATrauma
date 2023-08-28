@@ -5,6 +5,7 @@ import tqdm
 import cv2
 import pandas as pd
 
+import scan_preprocessing_use_sdl
 import scan_preprocessing
 
 ct_folder = os.path.join("data", "train_images")
@@ -41,6 +42,41 @@ def get_array_and_zpos(series_folder: str) -> (np.ndarray, np.ndarray):
         z_positions[slice_number - min_slice] = dcm_data[(0x20, 0x32)].value[-1]
 
     return ct_3D_image, z_positions
+
+if scan_preprocessing_use_sdl.USE_SDL:
+    import dicomsdl
+
+    def get_array_and_zpos_dsdl(series_folder: str):
+        ct_scan_files = [int(dcm[:-4]) for dcm in os.listdir(series_folder)]
+        ct_scan_files.sort()
+
+        min_slice = ct_scan_files[0]
+        max_slice = ct_scan_files[-1]
+
+        # Load the data
+        ct_3D_image = None
+        z_positions = np.zeros((max_slice - min_slice + 1,), dtype=np.float32)
+        shape = None
+        for slice_number in range(min_slice, max_slice + 1):
+            dcm_file = os.path.join(series_folder, "{}.dcm".format(slice_number))
+            dcm_data = dicomsdl.open(dcm_file)
+            slice_array = scan_preprocessing.to_float_array_dsdl(dcm_data)
+            if shape is None:
+                scales = np.array(dcm_data.PixelSpacing)
+                shape = slice_array.shape
+                new_shape = (int(shape[0] * scales[0]), int(shape[1] * scales[1]))
+                slice_array = cv2.resize(slice_array, (new_shape[1], new_shape[0]))
+                shape = slice_array.shape
+            else:
+                slice_array = cv2.resize(slice_array, (shape[1], shape[0]))
+            if ct_3D_image is None:
+                ct_3D_image = np.zeros(
+                    (max_slice - min_slice + 1, slice_array.shape[0], slice_array.shape[1]),
+                    dtype=np.float16)
+            ct_3D_image[slice_number - min_slice, :, :] = slice_array.astype(np.float16)
+            z_positions[slice_number - min_slice] = dcm_data[0x00200032][-1]
+
+        return ct_3D_image, z_positions
 
 if __name__ == "__main__":
     shape_info = {"patient_id": [], "series_id": [], "shape_h": [], "shape_w": [], "z_positions": []}
