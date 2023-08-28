@@ -186,3 +186,12 @@ if __name__ == "__main__":
 
         save_dataset("tiny_kidney_train", train_ids)
         save_dataset("tiny_kidney_val", val_ids)
+
+    if not os.path.isfile("split10.json"):
+        patient_ids_all = list(patient_injuries.index)
+        patient_ids_split10 = {}
+        for k in range(10):
+            patient_ids_split10["split{}".format(k)] = patient_ids_all[k::10]
+
+        with open("split10.json", "w") as f:
+            json.dump(patient_ids_split10, f, indent=4)
