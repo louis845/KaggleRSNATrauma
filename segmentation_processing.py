@@ -11,10 +11,10 @@ def to_class_array(dcm: pydicom.dataset.FileDataset, segmentation_arr: np.ndarra
     """
     segmentation_arr = segmentation_arr.astype(np.uint8).transpose(2, 0, 1)
     segmentation_arr = segmentation_arr[::-1, ...]
-    segmentation_arr = np.rot90(segmentation_arr, axes=(1, 2), k=1)
+    segmentation_arr = np.rot90(segmentation_arr, axes=(1, 2), k=1).copy()
 
-    segmentation_arr = torch.nn.functional.one_hot(torch.from_numpy(segmentation_arr).to(np.long), num_classes=6).numpy()[..., 1:]
-    segmentation_arr = segmentation_arr.to(dtype=torch.float32).numpy()
+    segmentation_arr = torch.nn.functional.one_hot(torch.from_numpy(segmentation_arr).to(torch.long), num_classes=6).numpy()[..., 1:]
+    segmentation_arr = segmentation_arr.astype(np.float32)
 
     scales = np.array(dcm.PixelSpacing)
     shape = segmentation_arr.shape

@@ -22,9 +22,11 @@ def get_array_and_zpos(series_folder: str) -> (np.ndarray, np.ndarray):
     ct_3D_image = None
     z_positions = np.zeros((max_slice - min_slice + 1,), dtype=np.float32)
     shape = None
+    last_dcm = None
     for slice_number in range(min_slice, max_slice + 1):
         dcm_file = os.path.join(series_folder, "{}.dcm".format(slice_number))
         dcm_data = pydicom.dcmread(dcm_file)
+        last_dcm = dcm_data
         slice_array = scan_preprocessing.to_float_array(dcm_data)
         if shape is None:
             scales = np.array(dcm_data.PixelSpacing)
@@ -41,7 +43,7 @@ def get_array_and_zpos(series_folder: str) -> (np.ndarray, np.ndarray):
         ct_3D_image[slice_number - min_slice, :, :] = slice_array.astype(np.float16)
         z_positions[slice_number - min_slice] = dcm_data[(0x20, 0x32)].value[-1]
 
-    return ct_3D_image, z_positions
+    return ct_3D_image, z_positions, last_dcm
 
 if scan_preprocessing_use_sdl.USE_SDL:
     import dicomsdl
@@ -85,7 +87,7 @@ if __name__ == "__main__":
         patient_folder = os.path.join(ct_folder, patient_id)
         for series_id in os.listdir(patient_folder):
             series_folder = os.path.join(ct_folder, patient_id, series_id)
-            ct_3D_image, z_positions = get_array_and_zpos(series_folder)
+            ct_3D_image, z_positions, _ = get_array_and_zpos(series_folder)
             shape = (ct_3D_image.shape[1], ct_3D_image.shape[2])
 
             npy_folder = os.path.join(np_folder, patient_id, series_id)
