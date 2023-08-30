@@ -272,7 +272,7 @@ class RawCTViewer(QMainWindow):
                 if os.path.isfile(os.path.join(self.segmentations_cropped_folder, series_id + ".hdf5")):
                     with h5py.File(os.path.join(self.segmentations_cropped_folder, series_id + ".hdf5"), "r") as f:
                         segmentation_3D_image = f["segmentation_arr"][()]
-                    self.segmentation_image = convert_segmentation_to_color(np.argmax(segmentation_3D_image, axis=-1))
+                    self.segmentation_image = convert_segmentation_to_color(np.any(segmentation_3D_image, axis=-1) * (np.argmax(segmentation_3D_image, axis=-1) + 1))
         elif self.image_options.currentText() == "hdf5_sampler":
             print("Loading HDF5 sampler data...")
             self.ct_3D_image = image_sampler.load_image(patient_id, series_id, slices_random=True, augmentation=True)

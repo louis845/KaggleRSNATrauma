@@ -22,32 +22,6 @@ def compute_max_angle(height: int, width: int):
 
     return min(max_h_angle - diag_angle, diag_angle - max_w_angle)
 
-def randomly_augment_image(image: torch.Tensor):
-    max_angle = compute_max_angle(image.shape[1], image.shape[2])
-    # at most 15 degrees
-    maxdev = min(max_angle, np.pi / 12)
-    if maxdev > 0.00872664626:  # if max deviation <= 0.5 degrees, we don't rotate
-        angle = np.random.uniform(-maxdev, maxdev)
-    else:
-        angle = 0.0
-
-    # rotate
-    image = torchvision.transforms.functional.rotate(image, angle * 180 / np.pi, expand=True, fill=0.0)
-
-    # expand randomly
-    assert image.shape[1] <= 512 and image.shape[2] <= 576
-    height_required = 512 - image.shape[1]
-    width_required = 576 - image.shape[2]
-
-    top = np.random.randint(0, height_required + 1)
-    bottom = height_required - top
-    left = np.random.randint(0, width_required + 1)
-    right = width_required - left
-
-    image = torch.nn.functional.pad(image, (left, right, top, bottom))
-
-    return image
-
 def load_image(patient_id: str, series_id: str,
                slices=15,
                slice_region_width = 9,
