@@ -23,12 +23,6 @@ import manager_models
 import model_3d_patch_resnet
 import metrics
 
-train_history, train_metrics, val_history, val_metrics = None, None, None, None
-ternary_collapsed_binary_weight = None
-ternary_weight = None
-bowel_weight = None
-extravasation_weight = None
-any_injury_weight = None
 
 def optimization_loss(probas: torch.Tensor, ground_truth_labels: torch.Tensor, is_binary: bool, weights: torch.Tensor):
     if is_binary:
@@ -289,51 +283,27 @@ if __name__ == "__main__":
         assert type(k) == int, "Channels must be a list of integers."
     for k in hidden3d_blocks:
         assert type(k) == int, "3D Blocks must be a list of integers."
-    assert proba_head in ["mean", "union"], "Probability head must be mean or union."
 
-    print("Hidden channels: " + str(args.hidden_channels))
+    print("Hidden channels: " + str(channel_progression))
     print("Hidden blocks: " + str(hidden_blocks))
+    print("Hidden 3D blocks: " + str(hidden3d_blocks))
     print("Bottleneck factor: " + str(bottleneck_factor))
-    print("Key dimension: " + str(key_dim))
     print("Squeeze and excitation: " + str(squeeze_excitation))
-    print("Probability head: " + str(proba_head))
-    print("Use average pool classifier: " + str(use_average_pool_classifier))
-    print("Use old resnet: " + str(use_old_resnet))
 
     # Create model and optimizer
-    model_resnet.BATCH_NORM_MOMENTUM = batch_norm_momentum
-    if use_old_resnet:
-        backbone = model_resnet_old.ResNetBackbone(in_channels=1, hidden_channels=hidden_channels // bottleneck_factor,
-                                               use_batch_norm=True, use_res_conv=True, pyr_height=len(hidden_blocks) - 1,
-                                               res_conv_blocks=hidden_blocks, bottleneck_expansion=bottleneck_factor,
-                                               squeeze_excitation=squeeze_excitation, use_initial_conv=True)
-    else:
-        backbone = model_resnet.ResNetBackbone(in_channels=1, hidden_channels=hidden_channels,
-                                               normalization_type=model_resnet.INSTANCE_NORM, pyr_height=len(hidden_blocks),
-                                               res_conv_blocks=hidden_blocks, bottleneck_factor=bottleneck_factor,
-                                               squeeze_excitation=squeeze_excitation)
-    if use_average_pool_classifier:
-        neck = model_resnet.AveragePoolClassifierNeck(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)), out_classes=out_classes)
-    else:
-        neck = model_resnet.PatchAttnClassifierNeck(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),
-                                                    key_dim=key_dim, out_classes=out_classes, normalization_type=model_resnet.INSTANCE_NORM)
-    if proba_head == "mean":
-        head = model_resnet.MeanProbaReductionHead(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),
-                                                    out_classes=out_classes)
-    else:
-        head = model_resnet.UnionProbaReductionHead(channels=hidden_channels * (2 ** (len(hidden_blocks) - 1)),
-                                                  out_classes=out_classes)
-    if use_old_resnet:
-        model = model_resnet_old.FullClassifier(backbone, neck, head)
-    else:
-        model = model_resnet.FullClassifier(backbone, neck, head)
+    backbone = model_3d_patch_resnet.ResNet3DBackbone(in_channels=1,
+                                            channel_progression=channel_progression,
+                                            res_conv3d_blocks=hidden3d_blocks,
+                                            res_conv_blocks=hidden_blocks,
+                                            bottleneck_factor=bottleneck_factor,
+                                            squeeze_excitation=squeeze_excitation)
+    model = model_3d_patch_resnet.LocalizedROINet(backbone = backbone, num_channels=4)
     model = model.to(config.device)
 
     print("Learning rate: " + str(learning_rate))
     print("Momentum: " + str(momentum))
     print("Second momentum: " + str(second_momentum))
     print("Optimizer: " + optimizer_type)
-    print("Batch norm momentum: " + str(batch_norm_momentum))
     if optimizer_type.lower() == "adam":
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, betas=(momentum, second_momentum))
     elif optimizer_type.lower() == "sgd":
@@ -361,83 +331,54 @@ if __name__ == "__main__":
     model_config = {
         "model": "Multilabel classifier",
         "epochs": epochs,
-        "batch_size": batch_size,
         "learning_rate": learning_rate,
         "momentum": momentum,
         "second_momentum": second_momentum,
-        "batch_norm_momentum": batch_norm_momentum,
         "disable_random_slices": disable_random_slices,
         "disable_random_augmentation": disable_random_augmentation,
         "num_slices": num_slices,
         "optimizer": optimizer_type,
         "epochs_per_save": epochs_per_save,
-        "hidden_channels": hidden_channels,
+        "channel_progression": channel_progression,
         "hidden_blocks": hidden_blocks,
+        "hidden3d_blocks": hidden3d_blocks,
         "bottleneck_factor": bottleneck_factor,
         "squeeze_excitation": squeeze_excitation,
-        "key_dim": key_dim,
-        "proba_head": proba_head,
-        "use_average_pool_classifier": use_average_pool_classifier,
         "num_extra_steps": num_extra_steps,
-        "async_sampler": async_sampler,
-        "labels": used_labels,
         "train_dataset": train_dset_name,
         "val_dataset": val_dset_name,
-        "training_script": "training_classifier.py",
+        "training_script": "training_ROI_preds.py",
     }
 
     # Save the model config
     with open(os.path.join(model_dir, "config.json"), "w") as f:
         json.dump(model_config, f, indent=4)
 
-    print("Using asynchronous sampler: " + str(async_sampler))
-    if async_sampler:
-        sampler = image_sampler_async.ImageSamplerAsync(max_batch_size=batch_size, device=config.device, num_slices=num_slices, sampler_name=train_dset_name)
-    else:
-        sampler = image_sampler.ImageSampler(num_slices=num_slices)
-
     # Create the metrics
     train_history = collections.defaultdict(list)
     train_metrics = {}
     val_history = collections.defaultdict(list)
     val_metrics = {}
-    if bowel:
-        train_metrics["bowel"] = metrics.BinaryMetrics(name="train_bowel")
-        val_metrics["bowel"] = metrics.BinaryMetrics(name="val_bowel")
-        train_metrics["bowel_loss"] = metrics.NumericalMetric(name="train_bowel_loss")
-        val_metrics["bowel_loss"] = metrics.NumericalMetric(name="val_bowel_loss")
-    if extravasation:
-        train_metrics["extravasation"] = metrics.BinaryMetrics(name="train_extravasation")
-        val_metrics["extravasation"] = metrics.BinaryMetrics(name="val_extravasation")
-        train_metrics["extravasation_loss"] = metrics.NumericalMetric(name="train_extravasation_loss")
-        val_metrics["extravasation_loss"] = metrics.NumericalMetric(name="val_extravasation_loss")
-    if kidney > 0:
-        if kidney == 1:
-            train_metrics["kidney"] = metrics.BinaryMetrics(name="train_kidney")
-            val_metrics["kidney"] = metrics.BinaryMetrics(name="val_kidney")
-        elif kidney == 2:
-            train_metrics["kidney"] = metrics.TernaryMetrics(name="train_kidney")
-            val_metrics["kidney"] = metrics.TernaryMetrics(name="val_kidney")
-        train_metrics["kidney_loss"] = metrics.NumericalMetric(name="train_kidney_loss")
-        val_metrics["kidney_loss"] = metrics.NumericalMetric(name="val_kidney_loss")
-    if liver > 0:
-        if liver == 1:
-            train_metrics["liver"] = metrics.BinaryMetrics(name="train_liver")
-            val_metrics["liver"] = metrics.BinaryMetrics(name="val_liver")
-        elif liver == 2:
-            train_metrics["liver"] = metrics.TernaryMetrics(name="train_liver")
-            val_metrics["liver"] = metrics.TernaryMetrics(name="val_liver")
-        train_metrics["liver_loss"] = metrics.NumericalMetric(name="train_liver_loss")
-        val_metrics["liver_loss"] = metrics.NumericalMetric(name="val_liver_loss")
-    if spleen > 0:
-        if spleen == 1:
-            train_metrics["spleen"] = metrics.BinaryMetrics(name="train_spleen")
-            val_metrics["spleen"] = metrics.BinaryMetrics(name="val_spleen")
-        elif spleen == 2:
-            train_metrics["spleen"] = metrics.TernaryMetrics(name="train_spleen")
-            val_metrics["spleen"] = metrics.TernaryMetrics(name="val_spleen")
-        train_metrics["spleen_loss"] = metrics.NumericalMetric(name="train_spleen_loss")
-        val_metrics["spleen_loss"] = metrics.NumericalMetric(name="val_spleen_loss")
+    # liver: 1
+    train_metrics["liver"] = metrics.BinaryMetrics(name="train_liver")
+    val_metrics["liver"] = metrics.BinaryMetrics(name="val_liver")
+    train_metrics["liver_loss"] = metrics.NumericalMetric(name="train_liver_loss")
+    val_metrics["liver_loss"] = metrics.NumericalMetric(name="val_liver_loss")
+    # spleen: 2
+    train_metrics["spleen"] = metrics.BinaryMetrics(name="train_spleen")
+    val_metrics["spleen"] = metrics.BinaryMetrics(name="val_spleen")
+    train_metrics["spleen_loss"] = metrics.NumericalMetric(name="train_spleen_loss")
+    val_metrics["spleen_loss"] = metrics.NumericalMetric(name="val_spleen_loss")
+    # kidney: 3
+    train_metrics["kidney"] = metrics.BinaryMetrics(name="train_kidney")
+    val_metrics["kidney"] = metrics.BinaryMetrics(name="val_kidney")
+    train_metrics["kidney_loss"] = metrics.NumericalMetric(name="train_kidney_loss")
+    val_metrics["kidney_loss"] = metrics.NumericalMetric(name="val_kidney_loss")
+    # bowel: 4
+    train_metrics["bowel"] = metrics.BinaryMetrics(name="train_bowel")
+    val_metrics["bowel"] = metrics.BinaryMetrics(name="val_bowel")
+    train_metrics["bowel_loss"] = metrics.NumericalMetric(name="train_bowel_loss")
+    val_metrics["bowel_loss"] = metrics.NumericalMetric(name="val_bowel_loss")
 
     # Compile
     single_training_step_compile = single_training_step#torch.compile(single_training_step)
@@ -498,5 +439,3 @@ if __name__ == "__main__":
         val_df.to_csv(os.path.join(model_dir, "val_metrics.csv"), index=True)
 
     memory_logger.close()
-
-    sampler.close()
