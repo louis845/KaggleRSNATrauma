@@ -415,9 +415,8 @@ class ResConvPure2D(torch.nn.Module):
 
 
 class ResNet3DBackbone(torch.nn.Module):
-    def __init__(self, in_channels: int, channel_progression: list[int], res_conv3d_blocks=[1, 2, 1, 0, 0],
-                 res_conv_blocks=[2, 6, 8, 23, 8], bottleneck_factor=1, squeeze_excitation=False,
-                 ):
+    def __init__(self, in_channels: int, channel_progression: list[int]=[2, 3, 6, 9, 15, 30, 128, 256, 512, 1024], res_conv3d_blocks=[1, 2, 1, 0, 0, 0],
+                 res_conv_blocks=[1, 2, 6, 8, 23, 8], bottleneck_factor=1, squeeze_excitation=False):
         super(ResNet3DBackbone, self).__init__()
 
         assert len(res_conv_blocks) == len(res_conv3d_blocks), "res_conv_blocks and res_conv3d_blocks must have the same length"
