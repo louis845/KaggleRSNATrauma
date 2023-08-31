@@ -1,0 +1,1 @@
+python training_ROI_preds.py --learning_rate 1e-3 --model ROI_small_test --device 0 --epochs 3 --train_data segmentation_fold2_train --val_data segmentation_fold2_val --channel_progression 1 1 2 4 4 4 4 4 4 4 4 --hidden_blocks 1 1 1 1 1 1

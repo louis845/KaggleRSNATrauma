@@ -57,6 +57,12 @@ class BinaryMetrics(Metrics):
         self.fp += torch.sum(y_pred * (1 - y_true)).cpu().item()
         self.fn += torch.sum((1 - y_pred) * y_true).cpu().item()
 
+    def add_direct(self, tp, tn, fp, fn):
+        self.tp += tp
+        self.tn += tn
+        self.fp += fp
+        self.fn += fn
+
     def get(self):
         """Compute the accuracy, precision, recall."""
         accuracy = (self.tp + self.tn) / (self.tp + self.tn + self.fp + self.fn)

@@ -6,7 +6,6 @@ class ResConv3DBlock(torch.nn.Module):
         """
         :param in_channels: number of input channels
         :param out_channels: number of output channels
-        :param normalization_type: "batchnorm" or "instancenorm"
         :param downsample: whether to downsample the input 2x2
         :param squeeze_excitation: whether to use squeeze and excitation
         :param squeeze_excitation_bottleneck_factor: factor by which to reduce the number of channels in the squeeze and excitation block
@@ -242,7 +241,6 @@ class ResConvPure2DBlock(torch.nn.Module):
         2D convolutions to a 2D block
         :param in_channels: number of input channels
         :param out_channels: number of output channels
-        :param normalization_type: "batchnorm" or "instancenorm"
         :param downsample: whether to downsample the input 2x2
         :param bottleneck_factor: how much to expand the number of channels in the bottleneck
         :param squeeze_excitation: whether to use squeeze and excitation

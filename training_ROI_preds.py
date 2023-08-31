@@ -15,102 +15,108 @@ import torch
 import torch.nn
 
 import config
-import image_sampler
-import image_sampler_async
 import logging_memory_utils
 import manager_folds
 import manager_models
 import model_3d_patch_resnet
 import metrics
+import image_ROI_sampler
 
+class MetricKeys:
+    LOSS = "loss"
+    LIVER = "liver"
+    LIVER_LOSS = "liver_loss"
+    SPLEEN = "spleen"
+    SPLEEN_LOSS = "spleen_loss"
+    KIDNEY = "kidney"
+    KIDNEY_LOSS = "kidney_loss"
+    BOWEL = "bowel"
+    BOWEL_LOSS = "bowel_loss"
 
-def optimization_loss(probas: torch.Tensor, ground_truth_labels: torch.Tensor, is_binary: bool, weights: torch.Tensor):
-    if is_binary:
-        gt_float = ground_truth_labels.to(torch.float32)
-        sample_weights = gt_float * weights + 1
-        return torch.sum(sample_weights *
-                         torch.nn.functional.binary_cross_entropy(probas, gt_float, reduction="none")), torch.sum(sample_weights).item()
+    @staticmethod
+    def get_metric_key_by_class_code(class_code: int, is_loss: bool):
+        if class_code == 0:
+            if is_loss:
+                return MetricKeys.LIVER_LOSS
+            else:
+                return MetricKeys.LIVER
+        elif class_code == 1:
+            if is_loss:
+                return MetricKeys.SPLEEN_LOSS
+            else:
+                return MetricKeys.SPLEEN
+        elif class_code == 2:
+            if is_loss:
+                return MetricKeys.KIDNEY_LOSS
+            else:
+                return MetricKeys.KIDNEY
+        elif class_code == 3:
+            if is_loss:
+                return MetricKeys.BOWEL_LOSS
+            else:
+                return MetricKeys.BOWEL
+        else:
+            raise ValueError("Invalid class code")
+
+# focal loss with exponent 2
+def focal_loss(output: torch.Tensor, target: torch.Tensor, reduce_channels=True):
+    # logsumexp trick for numerical stability
+    binary_ce = torch.nn.functional.binary_cross_entropy_with_logits(output, target, reduction="none")
+    if reduce_channels:
+        return torch.mean(((target - torch.sigmoid(output)) ** 2) * binary_ce)
     else:
-        gt_one_hot = torch.nn.functional.one_hot(ground_truth_labels, num_classes=3).to(torch.float32)
-        sample_weights = gt_one_hot * weights
-        return torch.sum(sample_weights *
-                         torch.nn.functional.nll_loss(torch.log(torch.clamp(probas, min=1e-10)),
-                                                      ground_truth_labels, reduction="none")), torch.sum(sample_weights).item()
-
-def target_loss(probas: torch.Tensor, ground_truth_labels: torch.Tensor, is_binary: bool):
-    pass
+        return torch.mean(((target - torch.sigmoid(output)) ** 2) * binary_ce, dim=(0, 2, 3))
 
 def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
-                         img_sample_batch_: torch.Tensor, labels_batch_: dict[str, torch.Tensor]):
+                         slices_: torch.Tensor, segmentations_: torch.Tensor):
     optimizer_.zero_grad()
-    probas = model_(img_sample_batch_)
-    preds = {}
-    losses = {}
-    loss = 0
-    for key in labels_batch_:
-        gt = labels_batch_[key]
-        if key == "bowel":
-            weights = bowel_weight
-        elif key == "extravasation":
-            weights = extravasation_weight
-        else:
-            if is_label_binary(key, used_labels):
-                weights = ternary_collapsed_binary_weight
-            else:
-                weights = ternary_weight
-        if is_label_binary(key, used_labels):
-            opt_loss, weight_sum = optimization_loss(probas[key], gt, is_binary=True, weights=weights)
-            losses[key] = {"loss": opt_loss, "weight_sum": weight_sum}
-            preds[key] = (probas[key] > 0.5).to(torch.long)
-        else:
-            opt_loss, weight_sum = optimization_loss(probas[key], gt, is_binary=False, weights=weights)
-            losses[key] = {"loss": opt_loss, "weight_sum": weight_sum}
-            preds[key] = torch.argmax(probas[key], dim=1)
-        loss = loss + losses[key]["loss"]
+    pred_segmentations = model_(slices_)
+    with torch.no_grad():
+        preds = (pred_segmentations > 0).to(torch.float32)
+    loss = focal_loss(pred_segmentations, segmentations_, reduce_channels=True)
     loss.backward()
     optimizer.step()
 
-    return preds, {key: {"loss":losses[key]["loss"].item(), "weight_sum":losses[key]["weight_sum"]} for key in losses}
+    with torch.no_grad():
+        tp_pixels = (preds * segmentations_).to(torch.long)
+        tn_pixels = ((1 - preds) * (1 - segmentations_)).to(torch.long)
+        fp_pixels = (preds * (1 - segmentations_)).to(torch.long)
+        fn_pixels = ((1 - preds) * segmentations_).to(torch.long)
 
-def single_validation_step(model_: torch.nn.Module, img_sample_batch_: torch.Tensor, labels_batch_: dict[str, torch.Tensor]):
-    probas = model_(img_sample_batch_)
-    preds = {}
-    losses = {}
-    loss = 0
-    for key in labels_batch_:
-        gt = labels_batch_[key]
-        if key == "bowel":
-            weights = bowel_weight
-        elif key == "extravasation":
-            weights = extravasation_weight
-        else:
-            if is_label_binary(key, used_labels):
-                weights = ternary_collapsed_binary_weight
-            else:
-                weights = ternary_weight
-        if is_label_binary(key, used_labels):
-            opt_loss, weight_sum = optimization_loss(probas[key], gt, is_binary=True, weights=weights)
-            losses[key] = {"loss": opt_loss, "weight_sum": weight_sum}
-            preds[key] = (probas[key] > 0.5).to(torch.long)
-        else:
-            opt_loss, weight_sum = optimization_loss(probas[key], gt, is_binary=False, weights=weights)
-            losses[key] = {"loss": opt_loss, "weight_sum": weight_sum}
-            preds[key] = torch.argmax(probas[key], dim=1)
-        loss = loss + losses[key]["loss"]
+        tp_per_class = torch.sum(tp_pixels, dim=(0, 2, 3))
+        tn_per_class = torch.sum(tn_pixels, dim=(0, 2, 3))
+        fp_per_class = torch.sum(fp_pixels, dim=(0, 2, 3))
+        fn_per_class = torch.sum(fn_pixels, dim=(0, 2, 3))
 
-    return preds, {key: {"loss": losses[key]["loss"].item(), "weight_sum": losses[key]["weight_sum"]} for key in losses}
+        loss_per_class = focal_loss(pred_segmentations, segmentations_, reduce_channels=False)
 
-def labels_to_tensor(labels: dict[str, np.ndarray]):
-    labels_tensor = {}
-    for key in labels:
-        labels_tensor[key] = torch.tensor(labels[key], dtype=torch.long, device=config.device)
-    return labels_tensor
+    return loss, tp_per_class, tn_per_class, fp_per_class, fn_per_class, loss_per_class
+
+def single_validation_step(model_: torch.nn.Module,
+                           slices_: torch.Tensor,
+                           segmentations_: torch.Tensor):
+    pred_segmentations = model_(slices_)
+    preds = (pred_segmentations > 0).to(torch.float32)
+    loss = focal_loss(pred_segmentations, segmentations_, reduce_channels=True)
+
+    tp_pixels = (preds * segmentations_).to(torch.long)
+    tn_pixels = ((1 - preds) * (1 - segmentations_)).to(torch.long)
+    fp_pixels = (preds * (1 - segmentations_)).to(torch.long)
+    fn_pixels = ((1 - preds) * segmentations_).to(torch.long)
+
+    tp_per_class = torch.sum(tp_pixels, dim=(0, 2, 3))
+    tn_per_class = torch.sum(tn_pixels, dim=(0, 2, 3))
+    fp_per_class = torch.sum(fp_pixels, dim=(0, 2, 3))
+    fn_per_class = torch.sum(fn_pixels, dim=(0, 2, 3))
+
+    loss_per_class = focal_loss(pred_segmentations, segmentations_, reduce_channels=False)
+
+    return loss, tp_per_class, tn_per_class, fp_per_class, fn_per_class, loss_per_class
 
 def training_step(record:bool):
     if record:
         for key in train_metrics:
             train_metrics[key].reset()
-
 
     # shuffle
     training_entries_shuffle = np.random.permutation(training_entries)
@@ -119,42 +125,37 @@ def training_step(record:bool):
     trained = 0
     with tqdm.tqdm(total=len(training_entries)) as pbar:
         while trained < len(training_entries):
-            # obtain batch
-            current_size = min(len(training_entries) - trained, batch_size)
-            patient_ids = training_entries_shuffle[trained:trained + current_size] # patient ids
-            series_ids = manager_folds.randomly_pick_series(patient_ids)
-            img_data_batch = sampler.obtain_sample_batch(patient_ids, series_ids, slices_random=(not disable_random_slices), augmentation=(not disable_random_augmentation))
-            ground_truth_labels_batch = labels_to_tensor(manager_folds.get_patient_status_labels(patient_ids, used_labels))
+            patient_id = training_entries_shuffle[trained] # patient id
+            series_id = manager_folds.randomly_pick_series([patient_id])[0]
+            slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=True, augmentation=True)
 
-            preds, individual_losses = single_training_step_compile(model, optimizer, img_data_batch * 255, ground_truth_labels_batch)
+            loss, tp_per_class, tn_per_class, fp_per_class,\
+                fn_per_class, loss_per_class = single_training_step(model, optimizer, slices, segmentations)
+            loss = loss.item()
+            tp_per_class = tp_per_class.cpu().numpy()
+            tn_per_class = tn_per_class.cpu().numpy()
+            fp_per_class = fp_per_class.cpu().numpy()
+            fn_per_class = fn_per_class.cpu().numpy()
+            loss_per_class = loss_per_class.cpu().numpy()
 
             # record
             if record:
                 # compute metrics
-                with torch.no_grad():
-                    for key in train_metrics:
-                        if key.endswith("loss"):
-                            organ = key[:-5]
-                            organ_loss = individual_losses[organ]
-                            train_metrics[key].add(organ_loss["loss"], organ_loss["weight_sum"])
-                        else:
-                            organ = key
-                            pred = preds[organ]
-                            gt = ground_truth_labels_batch[organ]
-                            train_metrics[key].add(pred, gt)
+                for class_code in range(4):
+                    organ_loss_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=True)
+                    organ_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=False)
+                    train_metrics[organ_loss_key].add(loss_per_class[class_code], 1)
+                    train_metrics[organ_key].add_direct(tp_per_class[class_code], tn_per_class[class_code],
+                                                 fp_per_class[class_code], fn_per_class[class_code])
+                train_metrics[MetricKeys.LOSS].add(loss, 1)
 
-
-            trained += current_size
-            pbar.update(current_size)
+            trained += 1
+            pbar.update(1)
 
     if record:
         current_metrics = {}
-        losses = []
         for key in train_metrics:
             train_metrics[key].write_to_dict(current_metrics)
-            if key.endswith("loss"):
-                losses.append(train_metrics[key].get())
-        current_metrics["train_loss"] = np.mean(losses)
 
         for key in current_metrics:
             train_history[key].append(current_metrics[key])
@@ -163,54 +164,46 @@ def validation_step():
     for key in val_metrics:
         val_metrics[key].reset()
 
-    # validating
+    # training
     validated = 0
     with tqdm.tqdm(total=len(validation_entries)) as pbar:
-        with torch.no_grad():
-            while validated < len(validation_entries):
-                # obtain batch
-                current_size = min(len(validation_entries) - validated, batch_size)
-                patient_ids = validation_entries[validated:validated + current_size]  # patient ids
-                series_ids = manager_folds.randomly_pick_series(patient_ids)
-                img_data_batch = sampler.obtain_sample_batch(patient_ids, series_ids, slices_random=False, augmentation=False)
-                ground_truth_labels_batch = labels_to_tensor(manager_folds.get_patient_status_labels(patient_ids, used_labels))
+        while validated < len(validation_entries):
+            patient_id = validation_entries[validated]  # patient id
+            series_id = manager_folds.randomly_pick_series([patient_id])[0]
+            slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=False,
+                                                                 augmentation=False)
 
-                preds, individual_losses = single_validation_step(model, img_data_batch * 255, ground_truth_labels_batch)
+            loss, tp_per_class, tn_per_class, fp_per_class, \
+                fn_per_class, loss_per_class = single_validation_step(model, slices, segmentations)
+            loss = loss.item()
+            tp_per_class = tp_per_class.cpu().numpy()
+            tn_per_class = tn_per_class.cpu().numpy()
+            fp_per_class = fp_per_class.cpu().numpy()
+            fn_per_class = fn_per_class.cpu().numpy()
+            loss_per_class = loss_per_class.cpu().numpy()
 
-                # compute metrics
-                with torch.no_grad():
-                    for key in val_metrics:
-                        if key.endswith("loss"):
-                            organ = key[:-5]
-                            organ_loss = individual_losses[organ]
-                            val_metrics[key].add(organ_loss["loss"], organ_loss["weight_sum"])
-                        else:
-                            organ = key
-                            pred = preds[organ]
-                            gt = ground_truth_labels_batch[organ]
-                            val_metrics[key].add(pred, gt)
+            # compute metrics
+            for class_code in range(4):
+                organ_loss_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=True)
+                organ_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=False)
+                val_metrics[organ_loss_key].add(loss_per_class[class_code], 1)
+                val_metrics[organ_key].add_direct(tp_per_class[class_code], tn_per_class[class_code],
+                                                    fp_per_class[class_code], fn_per_class[class_code])
+            val_metrics[MetricKeys.LOSS].add(loss, 1)
 
-                validated += current_size
-                pbar.update(current_size)
+            validated += 1
+            pbar.update(1)
 
     current_metrics = {}
-    losses = []
-    for key in val_metrics:
+    for key in train_metrics:
         val_metrics[key].write_to_dict(current_metrics)
-        if key.endswith("loss"):
-            losses.append(val_metrics[key].get())
-    current_metrics["val_loss"] = np.mean(losses)
 
     for key in current_metrics:
         val_history[key].append(current_metrics[key])
 
-def is_label_binary(label: str, used_labels: dict[str, object]):
-    return (type(used_labels[label]) == bool) or (used_labels[label] == 1)
-
 def print_history(metrics_history: collections.defaultdict[str, list]):
     for key in metrics_history:
-        if ("low" not in key) and ("high" not in key):
-            print("{}      {}".format(key, metrics_history[key][-1]))
+        print("{}      {}".format(key, metrics_history[key][-1]))
 
 
 if __name__ == "__main__":
@@ -297,7 +290,7 @@ if __name__ == "__main__":
                                             res_conv_blocks=hidden_blocks,
                                             bottleneck_factor=bottleneck_factor,
                                             squeeze_excitation=squeeze_excitation)
-    model = model_3d_patch_resnet.LocalizedROINet(backbone = backbone, num_channels=4)
+    model = model_3d_patch_resnet.LocalizedROINet(backbone = backbone, num_channels=channel_progression[-1])
     model = model.to(config.device)
 
     print("Learning rate: " + str(learning_rate))
@@ -359,26 +352,29 @@ if __name__ == "__main__":
     train_metrics = {}
     val_history = collections.defaultdict(list)
     val_metrics = {}
-    # liver: 1
-    train_metrics["liver"] = metrics.BinaryMetrics(name="train_liver")
-    val_metrics["liver"] = metrics.BinaryMetrics(name="val_liver")
-    train_metrics["liver_loss"] = metrics.NumericalMetric(name="train_liver_loss")
-    val_metrics["liver_loss"] = metrics.NumericalMetric(name="val_liver_loss")
-    # spleen: 2
-    train_metrics["spleen"] = metrics.BinaryMetrics(name="train_spleen")
-    val_metrics["spleen"] = metrics.BinaryMetrics(name="val_spleen")
-    train_metrics["spleen_loss"] = metrics.NumericalMetric(name="train_spleen_loss")
-    val_metrics["spleen_loss"] = metrics.NumericalMetric(name="val_spleen_loss")
-    # kidney: 3
-    train_metrics["kidney"] = metrics.BinaryMetrics(name="train_kidney")
-    val_metrics["kidney"] = metrics.BinaryMetrics(name="val_kidney")
-    train_metrics["kidney_loss"] = metrics.NumericalMetric(name="train_kidney_loss")
-    val_metrics["kidney_loss"] = metrics.NumericalMetric(name="val_kidney_loss")
-    # bowel: 4
-    train_metrics["bowel"] = metrics.BinaryMetrics(name="train_bowel")
-    val_metrics["bowel"] = metrics.BinaryMetrics(name="val_bowel")
-    train_metrics["bowel_loss"] = metrics.NumericalMetric(name="train_bowel_loss")
-    val_metrics["bowel_loss"] = metrics.NumericalMetric(name="val_bowel_loss")
+    # liver: 0
+    train_metrics[MetricKeys.LIVER] = metrics.BinaryMetrics(name="train_liver")
+    val_metrics[MetricKeys.LIVER] = metrics.BinaryMetrics(name="val_liver")
+    train_metrics[MetricKeys.LIVER_LOSS] = metrics.NumericalMetric(name="train_liver_loss")
+    val_metrics[MetricKeys.LIVER_LOSS] = metrics.NumericalMetric(name="val_liver_loss")
+    # spleen: 1
+    train_metrics[MetricKeys.SPLEEN] = metrics.BinaryMetrics(name="train_spleen")
+    val_metrics[MetricKeys.SPLEEN] = metrics.BinaryMetrics(name="val_spleen")
+    train_metrics[MetricKeys.SPLEEN_LOSS] = metrics.NumericalMetric(name="train_spleen_loss")
+    val_metrics[MetricKeys.SPLEEN_LOSS] = metrics.NumericalMetric(name="val_spleen_loss")
+    # kidney: 2
+    train_metrics[MetricKeys.KIDNEY] = metrics.BinaryMetrics(name="train_kidney")
+    val_metrics[MetricKeys.KIDNEY] = metrics.BinaryMetrics(name="val_kidney")
+    train_metrics[MetricKeys.KIDNEY_LOSS] = metrics.NumericalMetric(name="train_kidney_loss")
+    val_metrics[MetricKeys.KIDNEY_LOSS] = metrics.NumericalMetric(name="val_kidney_loss")
+    # bowel: 3
+    train_metrics[MetricKeys.BOWEL] = metrics.BinaryMetrics(name="train_bowel")
+    val_metrics[MetricKeys.BOWEL] = metrics.BinaryMetrics(name="val_bowel")
+    train_metrics[MetricKeys.BOWEL_LOSS] = metrics.NumericalMetric(name="train_bowel_loss")
+    val_metrics[MetricKeys.BOWEL_LOSS] = metrics.NumericalMetric(name="val_bowel_loss")
+    # general loss
+    train_metrics[MetricKeys.LOSS] = metrics.NumericalMetric(name="train_loss")
+    val_metrics[MetricKeys.LOSS] = metrics.NumericalMetric(name="val_loss")
 
     # Compile
     single_training_step_compile = single_training_step#torch.compile(single_training_step)

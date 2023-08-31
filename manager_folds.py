@@ -195,3 +195,24 @@ if __name__ == "__main__":
 
         with open("split10.json", "w") as f:
             json.dump(patient_ids_split10, f, indent=4)
+
+    if not os.path.isfile("folds/segmentation_fold1_train.json"):
+        label_str, summary = get_summarization_string(
+            {"bowel": True, "extravasation": True, "kidney": True, "liver": True, "spleen": True})
+
+        # get and check segmentation data
+        series_segmentation = [int(segmentation[:-4]) for segmentation in os.listdir("data/segmentations")]
+        meta_by_series = pd.read_csv("data/train_series_meta.csv", index_col=1)
+        patients_with_segmentation = list(set(list(meta_by_series.loc[series_segmentation]["patient_id"])))
+        meta_patients_with_segs = meta_by_series.loc[meta_by_series["patient_id"].isin(patients_with_segmentation)]
+        for k in range(len(meta_patients_with_segs)):
+            assert int(meta_patients_with_segs.index[k]) in series_segmentation, "Some patient has > 1 series, but not all of them have segmentations."
+
+        # restrict to those with segmentations and split
+        summary = summary.loc[patients_with_segmentation]
+        kfold = StratifiedKFold(n_splits=3, shuffle=True)
+        for k, (train_idx, val_idx) in enumerate(kfold.split(summary, summary)):
+            train_data = summary.iloc[train_idx].index
+            val_data = summary.iloc[val_idx].index
+            save_dataset("segmentation_fold{}_train".format(k), [int(patient_id) for patient_id in train_data])
+            save_dataset("segmentation_fold{}_val".format(k), [int(patient_id) for patient_id in val_data])
