@@ -82,14 +82,14 @@ class ResConv3DBlock(torch.nn.Module):
         x = self.conv1(x)
         x = self.batchnorm1(x)
         x = self.nonlin1(x)
-        assert x.shape == (N, self.out_channels, D, H, W)
+        assert x.shape == (N, self.out_channels // self.bottleneck_factor, D, H, W)
 
         if self.downsample:
             x = self.conv2(torch.nn.functional.pad(x, (1, 0, 1, 0, 0, 0), "reflect"))
-            assert x.shape == (N, self.out_channels, D - 2, H // 2, W // 2)
+            assert x.shape == (N, self.out_channels // self.bottleneck_factor, D - 2, H // 2, W // 2)
         else:
             x = self.conv2(x)
-            assert x.shape == (N, self.out_channels, D - 2, H, W)
+            assert x.shape == (N, self.out_channels // self.bottleneck_factor, D - 2, H, W)
         x = self.batchnorm2(x)
 
         if self.bottleneck_factor > 1:
@@ -205,7 +205,7 @@ class ResConv2DBlock(torch.nn.Module):
         x = self.conv1(x)
         x = self.batchnorm1(x)
         x = self.nonlin1(x)
-        assert x.shape == (N, self.out_channels, D, H, W)
+        assert x.shape == (N, self.out_channels // self.bottleneck_factor, D, H, W)
 
         if self.downsample:
             x = self.conv2(torch.nn.functional.pad(x, (1, 0, 1, 0, 0, 0), "reflect"))
@@ -320,7 +320,7 @@ class ResConvPure2DBlock(torch.nn.Module):
         x = self.conv1(x)
         x = self.batchnorm1(x)
         x = self.nonlin1(x)
-        assert x.shape == (N, self.out_channels, H, W)
+        assert x.shape == (N, self.out_channels // self.bottleneck_factor, H, W)
 
         if self.downsample:
             x = self.conv2(torch.nn.functional.pad(x, (1, 0, 1, 0), "reflect"))
