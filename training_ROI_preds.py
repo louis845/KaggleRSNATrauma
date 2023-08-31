@@ -243,6 +243,8 @@ if __name__ == "__main__":
     assert set(training_entries).issubset(with_segmentations), "Some training entries do not have expert segmentations."
     assert set(validation_entries).issubset(with_segmentations), "Some validation entries do not have expert segmentations."
 
+    # initialize gpu
+    config.parse_args(args)
 
     # get model directories
     model_dir, prev_model_dir = manager_models.parse_args(args)
