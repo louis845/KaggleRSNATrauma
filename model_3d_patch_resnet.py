@@ -120,7 +120,7 @@ class ResConv3DBlock(torch.nn.Module):
 
 class ResConv2DBlock(torch.nn.Module):
     def __init__(self, in_channels, out_channels, downsample=False,
-                 bottleneck_factor=1, squeeze_excitation=False):
+                 bottleneck_factor=1, squeeze_excitation=False, squeeze_excitation_bottleneck_factor=4):
         """
         Only applies 2D convolutions to a 3D block
         :param in_channels: number of input channels
@@ -129,6 +129,7 @@ class ResConv2DBlock(torch.nn.Module):
         :param downsample: whether to downsample the input 2x2
         :param bottleneck_factor: how much to expand the number of channels in the bottleneck
         :param squeeze_excitation: whether to use squeeze and excitation
+        :param squeeze_excitation_bottleneck_factor: how much to reduce the number of channels in the squeeze and excitation
         """
         super(ResConv2DBlock, self).__init__()
         assert in_channels <= out_channels
@@ -177,12 +178,12 @@ class ResConv2DBlock(torch.nn.Module):
             self.nonlin2 = torch.nn.GELU()
 
         if squeeze_excitation:
-            assert out_channels % 4 == 0, "out_channels must be divisible by 4"
+            assert out_channels % squeeze_excitation_bottleneck_factor == 0, "out_channels must be divisible by squeeze_excitation_bottleneck_factor"
             self.se_pool = torch.nn.AdaptiveAvgPool3d(1)
-            self.se_conv1 = torch.nn.Conv3d(out_channels, out_channels // 4, kernel_size=1, bias=True,
+            self.se_conv1 = torch.nn.Conv3d(out_channels, out_channels // squeeze_excitation_bottleneck_factor, kernel_size=1, bias=True,
                                             padding="same", padding_mode="replicate")
             self.se_relu = torch.nn.ReLU()
-            self.se_conv2 = torch.nn.Conv3d(out_channels // 4, out_channels, kernel_size=1, bias=True,
+            self.se_conv2 = torch.nn.Conv3d(out_channels // squeeze_excitation_bottleneck_factor, out_channels, kernel_size=1, bias=True,
                                             padding="same", padding_mode="replicate")
             self.se_sigmoid = torch.nn.Sigmoid()
 
@@ -349,6 +350,11 @@ class ResConvPure2DBlock(torch.nn.Module):
             result = self.nonlin2(x_init + x)
         return result
 
+def get_highest_divisor(num: int):
+    for k in range(4, 1, -1):
+        if num % k == 0:
+            return k
+
 class ResConv3D(torch.nn.Module):
     def __init__(self, in_channels: int, blocks_2d_channels: int, downsample=False, blocks_2d: int=3, blocks_3d_channels=[],
                  bottleneck_factor: int=1, squeeze_excitation=False):
@@ -364,21 +370,25 @@ class ResConv3D(torch.nn.Module):
         num_convs = 1
         self.conv_res.append(
             ResConv2DBlock(in_channels, blocks_2d_channels, downsample=downsample,
-                         bottleneck_factor=bottleneck_factor, squeeze_excitation=squeeze_excitation))
+                         bottleneck_factor=bottleneck_factor, squeeze_excitation=squeeze_excitation,
+                           squeeze_excitation_bottleneck_factor=get_highest_divisor(blocks_2d_channels)))
         for k in range(1, blocks_2d):
             self.conv_res.append(
                 ResConv2DBlock(blocks_2d_channels, blocks_2d_channels,
-                             bottleneck_factor=bottleneck_factor, squeeze_excitation=squeeze_excitation))
+                             bottleneck_factor=bottleneck_factor, squeeze_excitation=squeeze_excitation,
+                               squeeze_excitation_bottleneck_factor=get_highest_divisor(blocks_2d_channels)))
             num_convs += 1
         for k in range(len(blocks_3d_channels)):
             if k == 0:
                 self.conv_res.append(
                     ResConv3DBlock(blocks_2d_channels, blocks_3d_channels[k],
-                                 bottleneck_factor=bottleneck_factor, squeeze_excitation=squeeze_excitation))
+                                 bottleneck_factor=bottleneck_factor, squeeze_excitation=squeeze_excitation,
+                                   squeeze_excitation_bottleneck_factor=get_highest_divisor(blocks_3d_channels[k])))
             else:
                 self.conv_res.append(
                     ResConv3DBlock(blocks_3d_channels[k - 1], blocks_3d_channels[k],
-                                 bottleneck_factor=bottleneck_factor, squeeze_excitation=squeeze_excitation))
+                                 bottleneck_factor=bottleneck_factor, squeeze_excitation=squeeze_excitation,
+                                   squeeze_excitation_bottleneck_factor=get_highest_divisor(blocks_3d_channels[k])))
             num_convs += 1
 
         self.num_convs = num_convs
