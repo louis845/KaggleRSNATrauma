@@ -128,7 +128,7 @@ def training_step(record:bool):
         while trained < len(training_entries):
             patient_id = training_entries_shuffle[trained] # patient id
             series_id = manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0]
-            slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=True, augmentation=True)
+            slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=True, augmentation=True, slices=num_slices)
 
             loss, tp_per_class, tn_per_class, fp_per_class,\
                 fn_per_class, loss_per_class = single_training_step(model, optimizer, slices, segmentations)
@@ -172,7 +172,7 @@ def validation_step():
             patient_id = validation_entries[validated]  # patient id
             series_id = manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0]
             slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=False,
-                                                                 augmentation=False)
+                                                                 augmentation=False, slices=num_slices)
 
             loss, tp_per_class, tn_per_class, fp_per_class, \
                 fn_per_class, loss_per_class = single_validation_step(model, slices, segmentations)

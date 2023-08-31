@@ -8,4 +8,4 @@ while true; do
     sleep 10
 done
 
-python training_ROI_preds.py --learning_rate 1e-3 --model ROI_fold3 --device 0 --epochs 30 --train_data segmentation_fold2_train --val_data segmentation_fold2_val
+python training_ROI_preds.py --learning_rate 3e-4 --model ROI_fold3 --device 1 --epochs 100 --train_data segmentation_fold2_train --val_data segmentation_fold2_val --num_slices 10
