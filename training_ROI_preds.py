@@ -21,6 +21,7 @@ import manager_models
 import model_3d_patch_resnet
 import metrics
 import image_ROI_sampler
+import segmentation_expert_reviewed_manager
 
 class MetricKeys:
     LOSS = "loss"
@@ -126,7 +127,7 @@ def training_step(record:bool):
     with tqdm.tqdm(total=len(training_entries)) as pbar:
         while trained < len(training_entries):
             patient_id = training_entries_shuffle[trained] # patient id
-            series_id = manager_folds.randomly_pick_series([patient_id])[0]
+            series_id = manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0]
             slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=True, augmentation=True)
 
             loss, tp_per_class, tn_per_class, fp_per_class,\
@@ -169,7 +170,7 @@ def validation_step():
     with tqdm.tqdm(total=len(validation_entries)) as pbar:
         while validated < len(validation_entries):
             patient_id = validation_entries[validated]  # patient id
-            series_id = manager_folds.randomly_pick_series([patient_id])[0]
+            series_id = manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0]
             slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=False,
                                                                  augmentation=False)
 
@@ -238,6 +239,10 @@ if __name__ == "__main__":
     validation_entries = np.array(validation_entries)
     print("Training dataset: {}".format(train_dset_name))
     print("Validation dataset: {}".format(val_dset_name))
+    with_segmentations = set(segmentation_expert_reviewed_manager.get_patients_with_expert_segmentation())
+    assert set(training_entries).issubset(with_segmentations), "Some training entries do not have expert segmentations."
+    assert set(validation_entries).issubset(with_segmentations), "Some validation entries do not have expert segmentations."
+
 
     # get model directories
     model_dir, prev_model_dir = manager_models.parse_args(args)
@@ -377,7 +382,7 @@ if __name__ == "__main__":
     val_metrics[MetricKeys.LOSS] = metrics.NumericalMetric(name="val_loss")
 
     # Compile
-    single_training_step_compile = single_training_step#torch.compile(single_training_step)
+    single_training_step_compile = torch.compile(single_training_step)
 
     # Start training loop
     print("Training for {} epochs......".format(epochs))

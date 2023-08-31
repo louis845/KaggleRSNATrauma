@@ -31,7 +31,7 @@ class ResConv3DBlock(torch.nn.Module):
                                              bias=False, padding=0, groups=num_groups) # 3d conv
             else:
                 self.conv2 = torch.nn.Conv3d(bottleneck_channels, bottleneck_channels, kernel_size=3, bias=False,
-                                             padding=(0, 2, 2), padding_mode="replicate", groups=num_groups) # 3d conv
+                                             padding=(0, 1, 1), padding_mode="replicate", groups=num_groups) # 3d conv
             self.batchnorm2 = torch.nn.InstanceNorm3d(bottleneck_channels, affine=True)
             self.nonlin2 = torch.nn.GELU()
 
@@ -50,7 +50,7 @@ class ResConv3DBlock(torch.nn.Module):
                                              bias=False, padding=0) # 3d conv
             else:
                 self.conv2 = torch.nn.Conv3d(out_channels, out_channels, kernel_size=3, bias=False,
-                                             padding=(0, 2, 2), padding_mode="replicate") # 3d conv
+                                             padding=(0, 1, 1), padding_mode="replicate") # 3d conv
             self.batchnorm2 = torch.nn.InstanceNorm3d(out_channels, affine=True)
             self.nonlin2 = torch.nn.GELU()
         if squeeze_excitation:
@@ -469,6 +469,7 @@ class ResNet3DBackbone(torch.nn.Module):
 
 class LocalizedROINet(torch.nn.Module):
     def __init__(self, backbone: torch.nn.Module, num_channels: int):
+        super(LocalizedROINet, self).__init__()
         self.backbone = backbone
         self.num_channels = num_channels
 

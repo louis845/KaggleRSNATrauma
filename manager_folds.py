@@ -6,6 +6,8 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import StratifiedKFold
 
+import segmentation_expert_reviewed_manager
+
 folds_dataset_folder = "folds"
 if not os.path.exists(folds_dataset_folder):
     os.makedirs(folds_dataset_folder)
@@ -128,10 +130,10 @@ def get_patient_status_labels(patient_ids: list[int], labels: dict[str, object])
             columns[column] = np.argmax(columns[column], axis=1)
     return columns
 
-def randomly_pick_series(patient_ids: list) -> list:
+def randomly_pick_series(patient_ids: list, data_folder="data_hdf5") -> list:
     series_ids = []
     for patient_id in patient_ids:
-        patient_folder = os.path.join("data_hdf5", str(patient_id))
+        patient_folder = os.path.join(data_folder, str(patient_id))
         series = os.listdir(patient_folder)
         series_ids.append(series[np.random.randint(len(series))])
     return series_ids
@@ -201,12 +203,7 @@ if __name__ == "__main__":
             {"bowel": True, "extravasation": True, "kidney": True, "liver": True, "spleen": True})
 
         # get and check segmentation data
-        series_segmentation = [int(segmentation[:-4]) for segmentation in os.listdir("data/segmentations")]
-        meta_by_series = pd.read_csv("data/train_series_meta.csv", index_col=1)
-        patients_with_segmentation = list(set(list(meta_by_series.loc[series_segmentation]["patient_id"])))
-        meta_patients_with_segs = meta_by_series.loc[meta_by_series["patient_id"].isin(patients_with_segmentation)]
-        for k in range(len(meta_patients_with_segs)):
-            assert int(meta_patients_with_segs.index[k]) in series_segmentation, "Some patient has > 1 series, but not all of them have segmentations."
+        patients_with_segmentation = segmentation_expert_reviewed_manager.get_patients_with_expert_segmentation()
 
         # restrict to those with segmentations and split
         summary = summary.loc[patients_with_segmentation]

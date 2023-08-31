@@ -13,9 +13,11 @@ def compute_max_angle(height: int, width: int):
     diagonal = np.sqrt(float(height ** 2 + width ** 2))
     if diagonal <= 502:
         max_h_angle = np.pi / 2
-        max_w_angle = 0.0
     else:
         max_h_angle = np.arcsin(502 / diagonal)
+    if diagonal <= 566:
+        max_w_angle = 0.0
+    else:
         max_w_angle = np.arccos(566 / diagonal)
 
     diag_angle = np.arctan2(height, width)
@@ -29,12 +31,12 @@ def load_image(patient_id: str,
                slices_random=False,
                augmentation=False) -> (torch.Tensor, torch.Tensor):
     assert slice_region_width % 2 == 1, "slice_region_width must be odd"
-    slice_region_radius = (slice_region_width - 1) / 2
+    slice_region_radius = (slice_region_width - 1) // 2
 
-    # get slope and slice stride corresponding to 1cm
-    slope = shape_info.loc[series_id, "mean_slope"]
+    # get slope and slice stride corresponding to 0.5cm
+    slope = shape_info.loc[int(series_id), "mean_slope"]
     slope_abs = np.abs(slope)
-    slice_stride = 10 / slope_abs
+    slice_stride = 5 / slope_abs
     if slice_stride > 1:
         slice_span = np.linspace(-int(slice_region_radius * slice_stride), int(slice_region_radius * slice_stride),
                                  slice_region_width, dtype=np.int32)
@@ -45,6 +47,7 @@ def load_image(patient_id: str,
         slice_span = np.arange(-int(slice_region_radius * slice_stride), int(slice_region_radius * slice_stride) + 1, dtype=np.int32)
         contracted = True
         loaded_temp_depth = len(slice_span)
+    #print("Slice span: ", slice_span)
 
     with torch.no_grad():
         with h5py.File(os.path.join("data_hdf5_cropped", str(patient_id), str(series_id), "ct_3D_image.hdf5"), "r") as f:
@@ -60,12 +63,13 @@ def load_image(patient_id: str,
                 angle = 0.0
 
         # randomly pick slices, region of interest
-        slice_poses = np.linspace(0, total_slices - 1, slices + 2, dtype=np.int32)[1:-1] # equidistant
+        slice_poses = np.linspace(-slice_span[0], total_slices - 1 - slice_span[-1], slices + 2, dtype=np.int32)[1:-1] # equidistant
         if slices_random:
             dist = (np.min(np.diff(slice_poses)) // 2) - 1
             if dist > 1:
                 slice_poses = slice_poses + np.random.randint(-dist, dist + 1, size=slices)
-                slice_poses = np.clip(np.sort(slice_poses), -slice_span[0], total_slices - 1 - slice_span[-1])
+                slice_poses = np.sort(slice_poses)
+        slice_poses = np.clip(slice_poses, -slice_span[0], total_slices - 1 - slice_span[-1])
 
         # sample the images and the segmentation now
         image = torch.zeros((slices, 1, loaded_temp_depth, original_height, original_width), dtype=torch.float32, device=config.device)
@@ -73,10 +77,12 @@ def load_image(patient_id: str,
             slice_pos = slice_poses[k]
             with h5py.File(os.path.join("data_hdf5_cropped", str(patient_id), str(series_id), "ct_3D_image.hdf5"), "r") as f:
                 ct_3D_image = f["ct_3D_image"]
+                #print(slice_pos + slice_span)
                 image_slice = ct_3D_image[slice_pos + slice_span, ...]
             image[k, 0, ...].copy_(torch.from_numpy(image_slice))
         with h5py.File(os.path.join("data_segmentation_hdf_cropped", str(series_id) + ".hdf5"), "r") as f:
             segmentation_3D_image = f["segmentation_arr"]
+            #print("Slice poses:", slice_poses)
             segmentation_raw = segmentation_3D_image[slice_poses, ...].astype(dtype=bool)
             segmentations = np.zeros((slices, original_height, original_width, 4), dtype=bool)
             segmentations[..., :2] = segmentation_raw[..., :2]
@@ -87,14 +93,14 @@ def load_image(patient_id: str,
 
         # reshape the depth dimension if contracted
         if contracted:
-            image = torchvision.transforms.functional.interpolate(image,
+            image = torch.nn.functional.interpolate(image,
                                 size=(slice_region_width, original_height, original_width), mode="trilinear")
 
         assert image.shape[-2] == segmentations.shape[-2] and image.shape[-1] == segmentations.shape[-1]
         # whether augmentation or not, we return a (slices, C, slice_depth, 512, 576) image
         if augmentation:
             # rotate
-            image = torchvision.transforms.functional.rotate(image, angle * 180 / np.pi, expand=True, fill=0.0)
+            image = torchvision.transforms.functional.rotate(image.squeeze(1), angle * 180 / np.pi, expand=True, fill=0.0).unsqueeze(1)
             segmentations = torchvision.transforms.functional.rotate(segmentations, angle * 180 / np.pi, expand=True, fill=0.0)
 
             # expand randomly

@@ -130,10 +130,10 @@ def load_image(patient_id: str,
                augmentation=False) -> (torch.Tensor, torch.Tensor):
     global slice_region_width
     assert slice_region_width is not None, "You must initialize the async sampler with initialize_async_ROI_sampler()"
-    slice_region_radius = (slice_region_width - 1) / 2
+    slice_region_radius = (slice_region_width - 1) // 2
 
     # get slope and slice stride corresponding to 1cm
-    slope = image_ROI_sampler.shape_info.loc[series_id, "mean_slope"]
+    slope = image_ROI_sampler.shape_info.loc[int(series_id), "mean_slope"]
     slope_abs = np.abs(slope)
     slice_stride = 10 / slope_abs
     if slice_stride > 1:
