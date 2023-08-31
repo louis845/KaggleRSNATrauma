@@ -220,7 +220,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_slices", type=int, default=15, help="Number of slices to use. Default 15.")
     parser.add_argument("--optimizer", type=str, default="adam", help="Which optimizer to use. Available options: adam, sgd. Default adam.")
     parser.add_argument("--epochs_per_save", type=int, default=2, help="Number of epochs between saves. Default 2.")
-    parser.add_argument("--channel_progression", type=int, nargs="+", default=[2, 3, 6, 9, 15, 30, 128, 256, 512, 1024], help="The channels for progression in ResNet backbone.")
+    parser.add_argument("--channel_progression", type=int, nargs="+", default=[2, 3, 6, 9, 15, 32, 128, 256, 512, 1024], help="The channels for progression in ResNet backbone.")
     parser.add_argument("--hidden3d_blocks", type=int, nargs="+", default=[1, 2, 1, 0, 0, 0], help="Number of hidden 3d blocks for ResNet backbone.")
     parser.add_argument("--hidden_blocks", type=int, nargs="+", default=[1, 2, 6, 8, 23, 8], help="Number of hidden 2d blocks for ResNet backbone.")
     parser.add_argument("--bottleneck_factor", type=int, default=4, help="The bottleneck factor of the ResNet backbone. Default 4.")
