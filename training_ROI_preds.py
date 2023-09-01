@@ -134,7 +134,7 @@ def training_step(record:bool):
                                                                  slices=num_slices)
 
             loss, tp_per_class, tn_per_class, fp_per_class,\
-                fn_per_class, loss_per_class = single_training_step(model, optimizer, slices, segmentations)
+                fn_per_class, loss_per_class = single_training_step_compile(model, optimizer, slices, segmentations)
             loss = loss.item()
             tp_per_class = tp_per_class.cpu().numpy()
             tn_per_class = tn_per_class.cpu().numpy()
