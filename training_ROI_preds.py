@@ -128,7 +128,9 @@ def training_step(record:bool):
         while trained < len(training_entries):
             patient_id = training_entries_shuffle[trained] # patient id
             series_id = manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0]
-            slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=True, augmentation=True)
+            slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=not disable_random_slices,
+                                                                 translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                                 elastic_augmentation=not disable_elastic_augmentation)
 
             loss, tp_per_class, tn_per_class, fp_per_class,\
                 fn_per_class, loss_per_class = single_training_step(model, optimizer, slices, segmentations)
@@ -172,7 +174,7 @@ def validation_step():
             patient_id = validation_entries[validated]  # patient id
             series_id = manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0]
             slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=False,
-                                                                 augmentation=False)
+                                                                 translate_rotate_augmentation=False, elastic_augmentation=False)
 
             loss, tp_per_class, tn_per_class, fp_per_class, \
                 fn_per_class, loss_per_class = single_validation_step(model, slices, segmentations)
@@ -216,7 +218,8 @@ if __name__ == "__main__":
     parser.add_argument("--momentum", type=float, default=0.9, help="Momentum to use. Default 0.9. This would be the momentum for SGD, and beta1 for Adam.")
     parser.add_argument("--second_momentum", type=float, default=0.999, help="Second momentum to use. Default 0.999. This would be beta2 for Adam. Ignored if SGD.")
     parser.add_argument("--disable_random_slices", action="store_true", help="Whether to disable random slices. Default False.")
-    parser.add_argument("--disable_random_augmentation", action="store_true", help="Whether to disable random augmentation. Default False.")
+    parser.add_argument("--disable_rotpos_augmentation", action="store_true", help="Whether to disable rotation and translation augmentation. Default False.")
+    parser.add_argument("--disable_elastic_augmentation", action="store_true", help="Whether to disable elastic augmentation. Default False.")
     parser.add_argument("--num_slices", type=int, default=15, help="Number of slices to use. Default 15.")
     parser.add_argument("--optimizer", type=str, default="adam", help="Which optimizer to use. Available options: adam, sgd. Default adam.")
     parser.add_argument("--epochs_per_save", type=int, default=2, help="Number of epochs between saves. Default 2.")
@@ -255,7 +258,8 @@ if __name__ == "__main__":
     momentum = args.momentum
     second_momentum = args.second_momentum
     disable_random_slices = args.disable_random_slices
-    disable_random_augmentation = args.disable_random_augmentation
+    disable_rotpos_augmentation = args.disable_random_augmentation
+    disable_elastic_augmentation = args.disable_elastic_augmentation
     num_slices = args.num_slices
     optimizer_type = args.optimizer
     epochs_per_save = args.epochs_per_save
@@ -271,7 +275,8 @@ if __name__ == "__main__":
     print("Momentum: " + str(momentum))
     print("Second momentum: " + str(second_momentum))
     print("Disable random slices: " + str(disable_random_slices))
-    print("Disable random augmentation: " + str(disable_random_augmentation))
+    print("Disable rotation and translation augmentation: " + str(disable_rotpos_augmentation))
+    print("Disable elastic augmentation: " + str(disable_elastic_augmentation))
     print("Number of slices: " + str(num_slices))
 
     assert type(hidden_blocks) == list, "Blocks must be a list."
@@ -335,7 +340,8 @@ if __name__ == "__main__":
         "momentum": momentum,
         "second_momentum": second_momentum,
         "disable_random_slices": disable_random_slices,
-        "disable_random_augmentation": disable_random_augmentation,
+        "disable_rotpos_augmentation": disable_rotpos_augmentation,
+        "disable_elastic_augmentation": disable_elastic_augmentation,
         "num_slices": num_slices,
         "optimizer": optimizer_type,
         "epochs_per_save": epochs_per_save,

@@ -6,6 +6,7 @@ import torchvision.transforms.functional
 import pandas as pd
 
 import config
+import image_sampler_augmentations
 
 shape_info = pd.read_csv("data_hdf5_cropped/shape_info.csv", index_col=1)
 
@@ -29,7 +30,8 @@ def load_image(patient_id: str,
                slices = 15,
                slice_region_width = 9,
                slices_random=False,
-               augmentation=False) -> (torch.Tensor, torch.Tensor):
+               translate_rotate_augmentation=False,
+               elastic_augmentation=False) -> (torch.Tensor, torch.Tensor):
     assert slice_region_width % 2 == 1, "slice_region_width must be odd"
     slice_region_radius = (slice_region_width - 1) // 2
 
@@ -47,7 +49,6 @@ def load_image(patient_id: str,
         slice_span = np.arange(-int(slice_region_radius * slice_stride), int(slice_region_radius * slice_stride) + 1, dtype=np.int32)
         contracted = True
         loaded_temp_depth = len(slice_span)
-    #print("Slice span: ", slice_span)
 
     with torch.no_grad():
         with h5py.File(os.path.join("data_hdf5_cropped", str(patient_id), str(series_id), "ct_3D_image.hdf5"), "r") as f:
@@ -73,23 +74,48 @@ def load_image(patient_id: str,
 
         # sample the images and the segmentation now
         image = torch.zeros((slices, 1, loaded_temp_depth, original_height, original_width), dtype=torch.float32, device=config.device)
+        segmentations = torch.zeros((slices, 4, original_height, original_width), dtype=torch.float32, device=config.device)
         for k in range(slices):
             slice_pos = slice_poses[k]
+            cur_slice_depths = slice_pos + slice_span
+
+            # apply depthwise elastic deformation if necessary
+            if elastic_augmentation and not contracted:
+                min_slice = np.min(cur_slice_depths)
+                max_slice = np.max(cur_slice_depths)
+                dist = (np.min(np.diff(cur_slice_depths)) // 4) - 1
+                if dist > 1:
+                    cur_slice_depths = cur_slice_depths + np.random.randint(-dist, dist + 1, size=loaded_temp_depth)
+                    cur_slice_depths = np.clip(cur_slice_depths, min_slice, max_slice)
+                    cur_slice_depths[slice_region_radius] = slice_pos # make sure the center is the same
+
             with h5py.File(os.path.join("data_hdf5_cropped", str(patient_id), str(series_id), "ct_3D_image.hdf5"), "r") as f:
                 ct_3D_image = f["ct_3D_image"]
-                #print(slice_pos + slice_span)
-                image_slice = ct_3D_image[slice_pos + slice_span, ...]
-            image[k, 0, ...].copy_(torch.from_numpy(image_slice))
-        with h5py.File(os.path.join("data_segmentation_hdf_cropped", str(series_id) + ".hdf5"), "r") as f:
-            segmentation_3D_image = f["segmentation_arr"]
-            #print("Slice poses:", slice_poses)
-            segmentation_raw = segmentation_3D_image[slice_poses, ...].astype(dtype=bool)
-            segmentations = np.zeros((slices, original_height, original_width, 4), dtype=bool)
-            segmentations[..., :2] = segmentation_raw[..., :2]
-            segmentations[..., 2] = np.any(segmentation_raw[..., 2:4], axis=-1)
-            segmentations[..., 3] = segmentation_raw[..., 4]
-            del segmentation_raw
-        segmentations = torch.tensor(segmentations, dtype=torch.float32, device=config.device).permute((0, 3, 1, 2))
+                image_slice = ct_3D_image[cur_slice_depths, ...]
+            image_slice = torch.from_numpy(image_slice)
+
+            with h5py.File(os.path.join("data_segmentation_hdf_cropped", str(series_id) + ".hdf5"), "r") as f:
+                segmentation_3D_image = f["segmentation_arr"]
+                segmentation_raw = segmentation_3D_image[slice_pos, ...].astype(dtype=bool)
+                segmentation_slice = np.zeros((original_height, original_width, 4), dtype=bool)
+                segmentation_slice[..., :2] = segmentation_raw[..., :2]
+                segmentation_slice[..., 2] = np.any(segmentation_raw[..., 2:4], axis=-1)
+                segmentation_slice[..., 3] = segmentation_raw[..., 4]
+                del segmentation_raw
+            segmentation_slice = torch.tensor(segmentation_slice, dtype=torch.float32, device=config.device).permute((2, 0, 1))
+
+            # apply elastic deformation to height width
+            if elastic_augmentation:
+                displacement_field = image_sampler_augmentations.generate_displacement_field(original_width, original_height)
+                image_slice = torchvision.transforms.functional.elastic_transform(
+                    image_slice.unsqueeze(1), displacement_field,
+                    interpolation=torchvision.transforms.InterpolationMode.NEAREST).squeeze(1)
+                segmentation_slice = torchvision.transforms.functional.elastic_transform(
+                    segmentation_slice.unsqueeze(1), displacement_field,
+                    interpolation=torchvision.transforms.InterpolationMode.NEAREST).squeeze(1)
+
+            image[k, 0, ...].copy_(image_slice, non_blocking=True)
+            segmentations[k, ...].copy_(segmentation_slice, non_blocking=True)
 
         # reshape the depth dimension if contracted
         if contracted:
@@ -98,7 +124,7 @@ def load_image(patient_id: str,
 
         assert image.shape[-2] == segmentations.shape[-2] and image.shape[-1] == segmentations.shape[-1]
         # whether augmentation or not, we return a (slices, C, slice_depth, 512, 576) image
-        if augmentation:
+        if translate_rotate_augmentation:
             # rotate
             image = torchvision.transforms.functional.rotate(image.squeeze(1), angle * 180 / np.pi, expand=True, fill=0.0).unsqueeze(1)
             segmentations = torchvision.transforms.functional.rotate(segmentations, angle * 180 / np.pi, expand=True, fill=0.0)
