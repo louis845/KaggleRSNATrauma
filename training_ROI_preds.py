@@ -259,7 +259,7 @@ if __name__ == "__main__":
     momentum = args.momentum
     second_momentum = args.second_momentum
     disable_random_slices = args.disable_random_slices
-    disable_rotpos_augmentation = args.disable_random_augmentation
+    disable_rotpos_augmentation = args.disable_rotpos_augmentation
     disable_elastic_augmentation = args.disable_elastic_augmentation
     num_slices = args.num_slices
     optimizer_type = args.optimizer

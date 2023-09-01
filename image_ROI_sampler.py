@@ -102,11 +102,12 @@ def load_image(patient_id: str,
                 segmentation_slice[..., 2] = np.any(segmentation_raw[..., 2:4], axis=-1)
                 segmentation_slice[..., 3] = segmentation_raw[..., 4]
                 del segmentation_raw
-            segmentation_slice = torch.tensor(segmentation_slice, dtype=torch.float32, device=config.device).permute((2, 0, 1))
+            segmentation_slice = torch.tensor(segmentation_slice, dtype=torch.float32).permute((2, 0, 1))
 
             # apply elastic deformation to height width
             if elastic_augmentation:
                 displacement_field = image_sampler_augmentations.generate_displacement_field(original_width, original_height)
+                displacement_field = torch.from_numpy(displacement_field)
                 image_slice = torchvision.transforms.functional.elastic_transform(
                     image_slice.unsqueeze(1), displacement_field,
                     interpolation=torchvision.transforms.InterpolationMode.NEAREST).squeeze(1)
