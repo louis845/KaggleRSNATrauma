@@ -130,7 +130,8 @@ def training_step(record:bool):
             series_id = manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0]
             slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=not disable_random_slices,
                                                                  translate_rotate_augmentation=not disable_rotpos_augmentation,
-                                                                 elastic_augmentation=not disable_elastic_augmentation)
+                                                                 elastic_augmentation=not disable_elastic_augmentation,
+                                                                 slices=num_slices)
 
             loss, tp_per_class, tn_per_class, fp_per_class,\
                 fn_per_class, loss_per_class = single_training_step(model, optimizer, slices, segmentations)
