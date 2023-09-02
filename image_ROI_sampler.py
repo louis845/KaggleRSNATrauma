@@ -134,7 +134,7 @@ def load_image(patient_id: str,
                 else:
                     assert segmentation_slice.shape[0] == 4 and segmentation_slice.shape[1] == loaded_temp_depth
                     segmentation_slice = torchvision.transforms.functional.elastic_transform(
-                        segmentation_slice.view(4 * loaded_temp_depth, 1, original_height, original_width), displacement_field,
+                        segmentation_slice.reshape(4 * loaded_temp_depth, 1, original_height, original_width), displacement_field,
                         interpolation=torchvision.transforms.InterpolationMode.NEAREST).view(4, loaded_temp_depth, original_height, original_width)
 
             image[k, 0, ...].copy_(image_slice, non_blocking=True)
@@ -156,8 +156,15 @@ def load_image(patient_id: str,
             # rotate
             image = torchvision.transforms.functional.rotate(image.squeeze(1), angle * 180 / np.pi, expand=True,
                                                              interpolation=torchvision.transforms.InterpolationMode.NEAREST).unsqueeze(1)
-            segmentations = torchvision.transforms.functional.rotate(segmentations, angle * 180 / np.pi, expand=True,
-                                                                     interpolation=torchvision.transforms.InterpolationMode.NEAREST)
+            if segmentation_region_depth == 1:
+                segmentations = torchvision.transforms.functional.rotate(segmentations, angle * 180 / np.pi, expand=True,
+                                                                         interpolation=torchvision.transforms.InterpolationMode.NEAREST)
+            else:
+                N, C, D, H, W = segmentations.shape
+                segmentations = torchvision.transforms.functional.rotate(segmentations.reshape(N * C * D, 1, H, W), angle * 180 / np.pi, expand=True,
+                                                    interpolation=torchvision.transforms.InterpolationMode.NEAREST)
+                N_, _, H, W = segmentations.shape
+                segmentations = segmentations.view(N, C, D, H, W)
 
             # expand randomly
             assert image.shape[-2] <= 512 and image.shape[-1] <= 576
@@ -183,5 +190,9 @@ def load_image(patient_id: str,
             segmentations = torch.nn.functional.pad(segmentations, (left, right, top, bottom))
 
         # downscale segmentations by 32 with max pooling
-        segmentations = torch.nn.functional.max_pool2d(segmentations, kernel_size=32, stride=32)
+        if segmentation_region_depth == 1:
+            segmentations = torch.nn.functional.max_pool2d(segmentations, kernel_size=32, stride=32)
+        else:
+            segmentations = torch.nn.functional.max_pool2d(segmentations.view(slices, 4 * segmentation_region_depth, 512, 576),
+                                                kernel_size=32, stride=32).view(slices, 4, segmentation_region_depth, 16, 18)
     return image, segmentations
