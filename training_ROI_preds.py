@@ -66,7 +66,7 @@ def focal_loss(output: torch.Tensor, target: torch.Tensor, reduce_channels=True)
     if reduce_channels:
         return torch.mean(((target - torch.sigmoid(output)) ** 2) * binary_ce)
     else:
-        return torch.mean(((target - torch.sigmoid(output)) ** 2) * binary_ce, dim=(0, 2, 3))
+        return torch.mean(((target - torch.sigmoid(output)) ** 2) * binary_ce, dim=tensor_2d3d)
 
 def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
                          slices_: torch.Tensor, segmentations_: torch.Tensor):
@@ -84,10 +84,10 @@ def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimi
         fp_pixels = (preds * (1 - segmentations_)).to(torch.long)
         fn_pixels = ((1 - preds) * segmentations_).to(torch.long)
 
-        tp_per_class = torch.sum(tp_pixels, dim=(0, 2, 3))
-        tn_per_class = torch.sum(tn_pixels, dim=(0, 2, 3))
-        fp_per_class = torch.sum(fp_pixels, dim=(0, 2, 3))
-        fn_per_class = torch.sum(fn_pixels, dim=(0, 2, 3))
+        tp_per_class = torch.sum(tp_pixels, dim=tensor_2d3d)
+        tn_per_class = torch.sum(tn_pixels, dim=tensor_2d3d)
+        fp_per_class = torch.sum(fp_pixels, dim=tensor_2d3d)
+        fn_per_class = torch.sum(fn_pixels, dim=tensor_2d3d)
 
         loss_per_class = focal_loss(pred_segmentations, segmentations_, reduce_channels=False)
 
@@ -105,10 +105,10 @@ def single_validation_step(model_: torch.nn.Module,
     fp_pixels = (preds * (1 - segmentations_)).to(torch.long)
     fn_pixels = ((1 - preds) * segmentations_).to(torch.long)
 
-    tp_per_class = torch.sum(tp_pixels, dim=(0, 2, 3))
-    tn_per_class = torch.sum(tn_pixels, dim=(0, 2, 3))
-    fp_per_class = torch.sum(fp_pixels, dim=(0, 2, 3))
-    fn_per_class = torch.sum(fn_pixels, dim=(0, 2, 3))
+    tp_per_class = torch.sum(tp_pixels, dim=tensor_2d3d)
+    tn_per_class = torch.sum(tn_pixels, dim=tensor_2d3d)
+    fp_per_class = torch.sum(fp_pixels, dim=tensor_2d3d)
+    fn_per_class = torch.sum(fn_pixels, dim=tensor_2d3d)
 
     loss_per_class = focal_loss(pred_segmentations, segmentations_, reduce_channels=False)
 
@@ -131,7 +131,7 @@ def training_step(record:bool):
             slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=not disable_random_slices,
                                                                  translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                                  elastic_augmentation=not disable_elastic_augmentation,
-                                                                 slices=num_slices)
+                                                                 slices=num_slices, segmentation_region_depth=5 if use_3d_prediction else 1)
 
             loss, tp_per_class, tn_per_class, fp_per_class,\
                 fn_per_class, loss_per_class = single_training_step_compile(model, optimizer, slices, segmentations)
@@ -172,28 +172,30 @@ def validation_step():
     validated = 0
     with tqdm.tqdm(total=len(validation_entries)) as pbar:
         while validated < len(validation_entries):
-            patient_id = validation_entries[validated]  # patient id
-            series_id = manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0]
-            slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=False,
-                                                                 translate_rotate_augmentation=False, elastic_augmentation=False)
+            with torch.no_grad():
+                patient_id = validation_entries[validated]  # patient id
+                series_id = manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0]
+                slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=False,
+                                                                     translate_rotate_augmentation=False, elastic_augmentation=False,
+                                                                     segmentation_region_depth=5 if use_3d_prediction else 1)
 
-            loss, tp_per_class, tn_per_class, fp_per_class, \
-                fn_per_class, loss_per_class = single_validation_step(model, slices, segmentations)
-            loss = loss.item()
-            tp_per_class = tp_per_class.cpu().numpy()
-            tn_per_class = tn_per_class.cpu().numpy()
-            fp_per_class = fp_per_class.cpu().numpy()
-            fn_per_class = fn_per_class.cpu().numpy()
-            loss_per_class = loss_per_class.cpu().numpy()
+                loss, tp_per_class, tn_per_class, fp_per_class, \
+                    fn_per_class, loss_per_class = single_validation_step(model, slices, segmentations)
+                loss = loss.item()
+                tp_per_class = tp_per_class.cpu().numpy()
+                tn_per_class = tn_per_class.cpu().numpy()
+                fp_per_class = fp_per_class.cpu().numpy()
+                fn_per_class = fn_per_class.cpu().numpy()
+                loss_per_class = loss_per_class.cpu().numpy()
 
-            # compute metrics
-            for class_code in range(4):
-                organ_loss_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=True)
-                organ_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=False)
-                val_metrics[organ_loss_key].add(loss_per_class[class_code], 1)
-                val_metrics[organ_key].add_direct(tp_per_class[class_code], tn_per_class[class_code],
-                                                    fp_per_class[class_code], fn_per_class[class_code])
-            val_metrics[MetricKeys.LOSS].add(loss, 1)
+                # compute metrics
+                for class_code in range(4):
+                    organ_loss_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=True)
+                    organ_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=False)
+                    val_metrics[organ_loss_key].add(loss_per_class[class_code], 1)
+                    val_metrics[organ_key].add_direct(tp_per_class[class_code], tn_per_class[class_code],
+                                                        fp_per_class[class_code], fn_per_class[class_code])
+                val_metrics[MetricKeys.LOSS].add(loss, 1)
 
             validated += 1
             pbar.update(1)
@@ -229,6 +231,7 @@ if __name__ == "__main__":
     parser.add_argument("--hidden_blocks", type=int, nargs="+", default=[1, 2, 6, 8, 23, 8], help="Number of hidden 2d blocks for ResNet backbone.")
     parser.add_argument("--bottleneck_factor", type=int, default=4, help="The bottleneck factor of the ResNet backbone. Default 4.")
     parser.add_argument("--squeeze_excitation", action="store_false", help="Whether to use squeeze and excitation. Default True.")
+    parser.add_argument("--use_3d_prediction", action="store_true", help="Whether or not to predict a 3D region. Default False.")
     parser.add_argument("--num_extra_steps", type=int, default=0, help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
     manager_folds.add_argparse_arguments(parser)
     manager_models.add_argparse_arguments(parser)
@@ -269,6 +272,7 @@ if __name__ == "__main__":
     hidden_blocks = args.hidden_blocks
     bottleneck_factor = args.bottleneck_factor
     squeeze_excitation = args.squeeze_excitation
+    use_3d_prediction = args.use_3d_prediction
     num_extra_steps = args.num_extra_steps
 
     print("Epochs: " + str(epochs))
@@ -295,15 +299,27 @@ if __name__ == "__main__":
     print("Hidden 3D blocks: " + str(hidden3d_blocks))
     print("Bottleneck factor: " + str(bottleneck_factor))
     print("Squeeze and excitation: " + str(squeeze_excitation))
+    print("Use 3D prediction: " + str(use_3d_prediction))
 
-    # Create model and optimizer
+    # Create model and optimizer, and setup 3d or 2d
     backbone = model_3d_patch_resnet.ResNet3DBackbone(in_channels=1,
                                             channel_progression=channel_progression,
                                             res_conv3d_blocks=hidden3d_blocks,
                                             res_conv_blocks=hidden_blocks,
                                             bottleneck_factor=bottleneck_factor,
-                                            squeeze_excitation=squeeze_excitation)
-    model = model_3d_patch_resnet.LocalizedROINet(backbone = backbone, num_channels=channel_progression[-1])
+                                            squeeze_excitation=squeeze_excitation,
+                                            return_3d_features=use_3d_prediction)
+    if use_3d_prediction:
+        deep_channels = backbone.get_deep3d_channels()
+        print("Using 3D prediction. Detected deep channels: " + str(deep_channels) + "   Last channel: " + str(channel_progression[-1]))
+        model = model_3d_patch_resnet.NeighborhoodROINet(backbone = backbone, first_channels=deep_channels[0],
+                                                         mid_channels=deep_channels[1],
+                                                         last_channels=channel_progression[-1],
+                                                         feature_width=18, feature_height=16)
+        tensor_2d3d = (0, 2, 3, 4)
+    else:
+        model = model_3d_patch_resnet.LocalizedROINet(backbone = backbone, num_channels=channel_progression[-1])
+        tensor_2d3d = (0, 2, 3)
     model = model.to(config.device)
 
     print("Learning rate: " + str(learning_rate))
@@ -351,6 +367,7 @@ if __name__ == "__main__":
         "hidden3d_blocks": hidden3d_blocks,
         "bottleneck_factor": bottleneck_factor,
         "squeeze_excitation": squeeze_excitation,
+        "use_3d_prediction": use_3d_prediction,
         "num_extra_steps": num_extra_steps,
         "train_dataset": train_dset_name,
         "val_dataset": val_dset_name,
