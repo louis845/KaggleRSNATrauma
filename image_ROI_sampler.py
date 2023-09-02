@@ -132,9 +132,10 @@ def load_image(patient_id: str,
                         segmentation_slice.unsqueeze(1), displacement_field,
                         interpolation=torchvision.transforms.InterpolationMode.NEAREST).squeeze(1)
                 else:
+                    assert segmentation_slice.shape[0] == 4 and segmentation_slice.shape[1] == loaded_temp_depth
                     segmentation_slice = torchvision.transforms.functional.elastic_transform(
-                        segmentation_slice, displacement_field,
-                        interpolation=torchvision.transforms.InterpolationMode.NEAREST)
+                        segmentation_slice.view(4 * loaded_temp_depth, 1, original_height, original_width), displacement_field,
+                        interpolation=torchvision.transforms.InterpolationMode.NEAREST).view(4, loaded_temp_depth, original_height, original_width)
 
             image[k, 0, ...].copy_(image_slice, non_blocking=True)
             segmentations[k, ...].copy_(segmentation_slice, non_blocking=True)
