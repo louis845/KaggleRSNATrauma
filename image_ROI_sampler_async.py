@@ -115,7 +115,7 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 image_data = buffered_images.pop(0)
                 img_d, img_h, img_w = image_data["image"].shape
                 image_shared_memory_array[:img_d, :img_h, :img_w] = image_data["image"]
-                seg_shared_memory_array[4, :img_d, :img_h, :img_w] = image_data["segmentation"]
+                seg_shared_memory_array[:, :img_d, :img_h, :img_w] = image_data["segmentation"]
 
                 # set value to pass to main process
                 loaded_image_depth.value = img_d
@@ -215,7 +215,7 @@ def initialize_async_ROI_sampler(max_slice_region_depth = 9, use_3d=False, num_w
     loader_workers = []
     num_loader_workers = num_workers
     for k in range(num_workers):
-        loader_workers.append(SliceLoaderWorker("{}loader_{}".format(name, k),
+        loader_workers.append(SliceLoaderWorker("{}_loader_{}".format(name, k),
                                                 max_slice_region_depth=max_slice_region_depth, use_3d=use_3d))
 
 def clean_and_destroy_ROI_sampler():
