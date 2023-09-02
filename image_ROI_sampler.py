@@ -133,8 +133,8 @@ def load_image(patient_id: str,
                         interpolation=torchvision.transforms.InterpolationMode.NEAREST).squeeze(1)
                 else:
                     segmentation_slice = torchvision.transforms.functional.elastic_transform(
-                        segmentation_slice.unsqueeze(2), displacement_field,
-                        interpolation=torchvision.transforms.InterpolationMode.NEAREST).squeeze(2)
+                        segmentation_slice, displacement_field,
+                        interpolation=torchvision.transforms.InterpolationMode.NEAREST)
 
             image[k, 0, ...].copy_(image_slice, non_blocking=True)
             segmentations[k, ...].copy_(segmentation_slice, non_blocking=True)
