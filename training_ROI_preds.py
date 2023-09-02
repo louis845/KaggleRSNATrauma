@@ -21,6 +21,7 @@ import manager_models
 import model_3d_patch_resnet
 import metrics
 import image_ROI_sampler
+import image_ROI_sampler_async
 import segmentation_expert_reviewed_manager
 
 class MetricKeys:
@@ -128,10 +129,18 @@ def training_step(record:bool):
         while trained < len(training_entries):
             patient_id = training_entries_shuffle[trained] # patient id
             series_id = manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0]
-            slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=not disable_random_slices,
-                                                                 translate_rotate_augmentation=not disable_rotpos_augmentation,
-                                                                 elastic_augmentation=not disable_elastic_augmentation,
-                                                                 slices=num_slices, segmentation_region_depth=5 if use_3d_prediction else 1)
+            if use_async_sampler:
+                slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id,
+                                                                     slices_random=not disable_random_slices,
+                                                                     translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                                     elastic_augmentation=not disable_elastic_augmentation,
+                                                                     slices=num_slices,
+                                                                     segmentation_region_depth=5 if use_3d_prediction else 1)
+            else:
+                slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=not disable_random_slices,
+                                                                     translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                                     elastic_augmentation=not disable_elastic_augmentation,
+                                                                     slices=num_slices, segmentation_region_depth=5 if use_3d_prediction else 1)
 
             loss, tp_per_class, tn_per_class, fp_per_class,\
                 fn_per_class, loss_per_class = single_training_step_compile(model, optimizer, slices, segmentations)
@@ -175,9 +184,15 @@ def validation_step():
             with torch.no_grad():
                 patient_id = validation_entries[validated]  # patient id
                 series_id = manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0]
-                slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=False,
-                                                                     translate_rotate_augmentation=False, elastic_augmentation=False,
-                                                                     segmentation_region_depth=5 if use_3d_prediction else 1)
+                if use_async_sampler:
+                    slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id, slices_random=False,
+                                                                         translate_rotate_augmentation=False,
+                                                                         elastic_augmentation=False,
+                                                                         segmentation_region_depth=5 if use_3d_prediction else 1)
+                else:
+                    slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=False,
+                                                                         translate_rotate_augmentation=False, elastic_augmentation=False,
+                                                                         segmentation_region_depth=5 if use_3d_prediction else 1)
 
                 loss, tp_per_class, tn_per_class, fp_per_class, \
                     fn_per_class, loss_per_class = single_validation_step(model, slices, segmentations)
@@ -232,6 +247,7 @@ if __name__ == "__main__":
     parser.add_argument("--bottleneck_factor", type=int, default=4, help="The bottleneck factor of the ResNet backbone. Default 4.")
     parser.add_argument("--squeeze_excitation", action="store_false", help="Whether to use squeeze and excitation. Default True.")
     parser.add_argument("--use_3d_prediction", action="store_true", help="Whether or not to predict a 3D region. Default False.")
+    parser.add_argument("--use_async_sampler", action="store_true", help="Whether or not to use an asynchronous sampler. Default False.")
     parser.add_argument("--num_extra_steps", type=int, default=0, help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
     manager_folds.add_argparse_arguments(parser)
     manager_models.add_argparse_arguments(parser)
@@ -273,6 +289,7 @@ if __name__ == "__main__":
     bottleneck_factor = args.bottleneck_factor
     squeeze_excitation = args.squeeze_excitation
     use_3d_prediction = args.use_3d_prediction
+    use_async_sampler = args.use_async_sampler
     num_extra_steps = args.num_extra_steps
 
     print("Epochs: " + str(epochs))
@@ -368,6 +385,7 @@ if __name__ == "__main__":
         "bottleneck_factor": bottleneck_factor,
         "squeeze_excitation": squeeze_excitation,
         "use_3d_prediction": use_3d_prediction,
+        "use_async_sampler": use_async_sampler,
         "num_extra_steps": num_extra_steps,
         "train_dataset": train_dset_name,
         "val_dataset": val_dset_name,
@@ -409,6 +427,11 @@ if __name__ == "__main__":
 
     # Compile
     single_training_step_compile = torch.compile(single_training_step)
+
+    # Initialize the async sampler if necessary
+    if use_async_sampler:
+        print("Initializing async sampler....")
+        image_ROI_sampler_async.initialize_async_ROI_sampler(use_3d=use_3d_prediction, name=train_dset_name)
 
     # Start training loop
     print("Training for {} epochs......".format(epochs))
@@ -466,3 +489,6 @@ if __name__ == "__main__":
         val_df.to_csv(os.path.join(model_dir, "val_metrics.csv"), index=True)
 
     memory_logger.close()
+
+    if use_async_sampler:
+        image_ROI_sampler_async.clean_and_destroy_ROI_sampler()
