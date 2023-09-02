@@ -63,7 +63,7 @@ class MetricKeys:
 # focal loss with exponent 2
 def focal_loss(output: torch.Tensor, target: torch.Tensor, reduce_channels=True):
     # logsumexp trick for numerical stability
-    binary_ce = torch.nn.functional.binary_cross_entropy_with_logits(output, target, reduction="none")
+    binary_ce = torch.nn.functional.binary_cross_entropy_with_logits(output, target, reduction="none") * (1 + target * (positive_weight - 1))
     if reduce_channels:
         return torch.mean(((target - torch.sigmoid(output)) ** 2) * binary_ce)
     else:
@@ -247,6 +247,7 @@ if __name__ == "__main__":
     parser.add_argument("--bottleneck_factor", type=int, default=4, help="The bottleneck factor of the ResNet backbone. Default 4.")
     parser.add_argument("--squeeze_excitation", action="store_false", help="Whether to use squeeze and excitation. Default True.")
     parser.add_argument("--use_3d_prediction", action="store_true", help="Whether or not to predict a 3D region. Default False.")
+    parser.add_argument("--positive_weight", type=float, default=3.0, help="The weight for positive samples. Default 3.0.")
     parser.add_argument("--use_async_sampler", action="store_true", help="Whether or not to use an asynchronous sampler. Default False.")
     parser.add_argument("--num_extra_steps", type=int, default=0, help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
     manager_folds.add_argparse_arguments(parser)
@@ -289,6 +290,7 @@ if __name__ == "__main__":
     bottleneck_factor = args.bottleneck_factor
     squeeze_excitation = args.squeeze_excitation
     use_3d_prediction = args.use_3d_prediction
+    positive_weight = args.positive_weight
     use_async_sampler = args.use_async_sampler
     num_extra_steps = args.num_extra_steps
 
@@ -317,6 +319,7 @@ if __name__ == "__main__":
     print("Bottleneck factor: " + str(bottleneck_factor))
     print("Squeeze and excitation: " + str(squeeze_excitation))
     print("Use 3D prediction: " + str(use_3d_prediction))
+    print("Positive weight: " + str(positive_weight))
 
     # Create model and optimizer, and setup 3d or 2d
     backbone = model_3d_patch_resnet.ResNet3DBackbone(in_channels=1,
@@ -385,6 +388,7 @@ if __name__ == "__main__":
         "bottleneck_factor": bottleneck_factor,
         "squeeze_excitation": squeeze_excitation,
         "use_3d_prediction": use_3d_prediction,
+        "positive_weight": positive_weight,
         "use_async_sampler": use_async_sampler,
         "num_extra_steps": num_extra_steps,
         "train_dataset": train_dset_name,
