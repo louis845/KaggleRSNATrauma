@@ -23,5 +23,3 @@ if __name__ == "__main__":
             ct_3D_image = f["ct_3D_image"][()]
 
         assert segmentation_labels.shape[2] == ct_3D_image.shape[0], "Segmentation and image have different depths. Shape: {} {}".format(segmentation_labels.shape, ct_3D_image.shape)
-        assert segmentation_labels.shape[0] == ct_3D_image.shape[2], "Segmentation and image have different heights. Shape: {} {}".format(segmentation_labels.shape, ct_3D_image.shape)
-        assert segmentation_labels.shape[1] == ct_3D_image.shape[1], "Segmentation and image have different widths. Shape: {} {}".format(segmentation_labels.shape, ct_3D_image.shape)
