@@ -303,8 +303,8 @@ def load_image(patient_id: str,
         worker_used = 0
         for k in range(slices):
             image_slice, segmentation_slice = loader_workers[worker_used % num_loader_workers].get_requested_image()
-            image[k, 0, ...].copy_(image_slice, non_blocking=True)
-            segmentations[k, ...].copy_(segmentation_slice, non_blocking=True)
+            image[k, 0, ...].copy_(torch.from_numpy(image_slice), non_blocking=True)
+            segmentations[k, ...].copy_(torch.from_numpy(segmentation_slice), non_blocking=True)
             worker_used += 1
 
         # reshape the depth dimension if contracted
