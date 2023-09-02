@@ -201,8 +201,8 @@ class SliceLoaderWorker:
         self.image_required_flag.value = True
         self.image_available_lock.acquire(block=True)
 
-        return self.image_shared_memory_array[:self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width].copy(),\
-                self.seg_shared_memory_array[:, :self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width].copy()
+        return self.image_shared_memory_array[:self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width.value].copy(),\
+                self.seg_shared_memory_array[:, :self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width.value].copy()
 
 
 slice_region_depth: int = None
