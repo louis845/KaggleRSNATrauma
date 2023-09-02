@@ -13,7 +13,7 @@ if __name__ == "__main__":
     patient_id_table = pd.read_csv("data/train_series_meta.csv", index_col=1)
 
     for file in tqdm.tqdm(os.listdir(folder)):
-        series_id = file[:-4]
+        series_id = file[:-5]
         file_path = os.path.join(folder, file)
         with h5py.File(file_path, "r") as f:
             segmentation_labels = f["segmentation_labels"][()]
