@@ -159,14 +159,14 @@ class SliceLoaderWorker:
                                                                                   name="{}_seg".format(worker_name))
             del seg
             self.seg_shared_memory_array = np.ndarray((4, max_slice_region_depth, max_image_height, max_image_width),
-                                                        dtype=np.float32, buffer=self.image_shared_memory.buf)
+                                                        dtype=np.float32, buffer=self.seg_shared_memory.buf)
         else:
             seg = np.zeros((4, max_image_height, max_image_width), dtype=np.float32)
             self.seg_shared_memory = multiprocessing.shared_memory.SharedMemory(create=True, size=seg.nbytes,
                                                                                 name="{}_seg".format(worker_name))
             del seg
             self.seg_shared_memory_array = np.ndarray((4, max_image_height, max_image_width),
-                                                      dtype=np.float32, buffer=self.image_shared_memory.buf)
+                                                      dtype=np.float32, buffer=self.seg_shared_memory.buf)
 
         self.loaded_image_depth = multiprocessing.Value(ctypes.c_int, 0)
         self.loaded_image_width = multiprocessing.Value(ctypes.c_int, 0)
