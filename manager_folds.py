@@ -203,7 +203,7 @@ if __name__ == "__main__":
             {"bowel": True, "extravasation": True, "kidney": True, "liver": True, "spleen": True})
 
         # get and check segmentation data
-        patients_with_segmentation = manager_segmentations.get_patients_with_expert_segmentation()
+        patients_with_segmentation = [int(x) for x in manager_segmentations.get_patients_with_expert_segmentation()]
 
         # restrict to those with segmentations and split
         summary = summary.loc[patients_with_segmentation]
