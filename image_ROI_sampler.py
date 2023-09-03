@@ -27,6 +27,7 @@ def compute_max_angle(height: int, width: int):
 
 def load_image(patient_id: str,
                series_id: str,
+               segmentation_folder: str,
                slices = 15,
                slice_region_depth = 9,
                segmentation_region_depth = 1,
@@ -76,11 +77,11 @@ def load_image(patient_id: str,
         slice_poses = np.clip(slice_poses, -slice_span[0], total_slices - 1 - slice_span[-1])
 
         # sample the images and the segmentation now
-        image = torch.zeros((slices, 1, loaded_temp_depth, original_height, original_width), dtype=torch.float32, device=config.device)
+        image = torch.zeros((slices, 1, loaded_temp_depth, original_height, original_width), dtype=torch.float32)
         if segmentation_region_depth == 1:
-            segmentations = torch.zeros((slices, 4, original_height, original_width), dtype=torch.float32, device=config.device)
+            segmentations = torch.zeros((slices, 4, original_height, original_width), dtype=torch.float32)
         else:
-            segmentations = torch.zeros((slices, 4, loaded_temp_depth, original_height, original_width), dtype=torch.float32, device=config.device)
+            segmentations = torch.zeros((slices, 4, loaded_temp_depth, original_height, original_width), dtype=torch.float32)
         for k in range(slices):
             slice_pos = slice_poses[k]
             cur_slice_depths = slice_pos + slice_span
@@ -100,7 +101,7 @@ def load_image(patient_id: str,
                 image_slice = ct_3D_image[cur_slice_depths, ...]
             image_slice = torch.from_numpy(image_slice)
 
-            with h5py.File(os.path.join("data_segmentation_hdf_cropped", str(series_id) + ".hdf5"), "r") as f:
+            with h5py.File(os.path.join(segmentation_folder, str(series_id) + ".hdf5"), "r") as f:
                 segmentation_3D_image = f["segmentation_arr"]
                 if segmentation_region_depth == 1:
                     segmentation_raw = segmentation_3D_image[slice_pos, ...].astype(dtype=bool)

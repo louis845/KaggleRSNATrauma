@@ -22,7 +22,7 @@ import model_3d_patch_resnet
 import metrics
 import image_ROI_sampler
 import image_ROI_sampler_async
-import segmentation_expert_reviewed_manager
+import manager_segmentations
 
 class MetricKeys:
     LOSS = "loss"
@@ -60,22 +60,25 @@ class MetricKeys:
         else:
             raise ValueError("Invalid class code")
 
+bowel_mask_tensor = None # to be initialized with tensor_2d3d
 # focal loss with exponent 2
-def focal_loss(output: torch.Tensor, target: torch.Tensor, reduce_channels=True):
+def focal_loss(output: torch.Tensor, target: torch.Tensor, reduce_channels=True, include_bowel=True):
     # logsumexp trick for numerical stability
     binary_ce = torch.nn.functional.binary_cross_entropy_with_logits(output, target, reduction="none") * (1 + target * (positive_weight - 1))
+    if not include_bowel:
+        binary_ce = binary_ce * bowel_mask_tensor
     if reduce_channels:
         return torch.mean(((target - torch.sigmoid(output)) ** 2) * binary_ce)
     else:
         return torch.mean(((target - torch.sigmoid(output)) ** 2) * binary_ce, dim=tensor_2d3d)
 
 def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
-                         slices_: torch.Tensor, segmentations_: torch.Tensor):
+                         slices_: torch.Tensor, segmentations_: torch.Tensor, include_bowel: bool):
     optimizer_.zero_grad()
     pred_segmentations = model_(slices_)
     with torch.no_grad():
         preds = (pred_segmentations > 0).to(torch.float32)
-    loss = focal_loss(pred_segmentations, segmentations_, reduce_channels=True)
+    loss = focal_loss(pred_segmentations, segmentations_, reduce_channels=True, include_bowel=include_bowel)
     loss.backward()
     optimizer.step()
 
@@ -128,22 +131,30 @@ def training_step(record:bool):
     with tqdm.tqdm(total=len(training_entries)) as pbar:
         while trained < len(training_entries):
             patient_id = training_entries_shuffle[trained] # patient id
-            series_id = manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0]
+            if manager_segmentations.patient_has_expert_segmentations(patient_id):
+                series_id = str(manager_segmentations.randomly_pick_expert_segmentation(patient_id))
+                is_expert = True
+                seg_folder = manager_segmentations.EXPERT_SEGMENTATION_FOLDER
+            else:
+                series_id = str(manager_segmentations.randomly_pick_TSM_segmentation(patient_id))
+                is_expert = False
+                seg_folder = manager_segmentations.TSM_SEGMENTATION_FOLDER
             if use_async_sampler:
-                slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id,
+                slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id, segmentation_folder=seg_folder,
                                                                      slices_random=not disable_random_slices,
                                                                      translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                                      elastic_augmentation=not disable_elastic_augmentation,
                                                                      slices=num_slices,
                                                                      segmentation_region_depth=5 if use_3d_prediction else 1)
             else:
-                slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=not disable_random_slices,
+                slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, segmentation_folder=seg_folder,
+                                                                     slices_random=not disable_random_slices,
                                                                      translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                                      elastic_augmentation=not disable_elastic_augmentation,
                                                                      slices=num_slices, segmentation_region_depth=5 if use_3d_prediction else 1)
 
             loss, tp_per_class, tn_per_class, fp_per_class,\
-                fn_per_class, loss_per_class = single_training_step_compile(model, optimizer, slices, segmentations)
+                fn_per_class, loss_per_class = single_training_step_compile(model, optimizer, slices, segmentations, include_bowel=is_expert)
             loss = loss.item()
             tp_per_class = tp_per_class.cpu().numpy()
             tn_per_class = tn_per_class.cpu().numpy()
@@ -155,6 +166,8 @@ def training_step(record:bool):
             if record:
                 # compute metrics
                 for class_code in range(4):
+                    if class_code == 3 and not is_expert:
+                        continue
                     organ_loss_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=True)
                     organ_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=False)
                     train_metrics[organ_loss_key].add(loss_per_class[class_code], 1)
@@ -183,15 +196,27 @@ def validation_step():
         while validated < len(validation_entries):
             with torch.no_grad():
                 patient_id = validation_entries[validated]  # patient id
-                series_id = manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0]
+                if manager_segmentations.patient_has_expert_segmentations(patient_id):
+                    series_id = str(manager_segmentations.randomly_pick_expert_segmentation(patient_id))
+                    seg_folder = manager_segmentations.EXPERT_SEGMENTATION_FOLDER
+                else:
+                    series_id = str(manager_segmentations.randomly_pick_TSM_segmentation(patient_id))
+                    seg_folder = manager_segmentations.TSM_SEGMENTATION_FOLDER
                 if use_async_sampler:
-                    slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id, slices_random=False,
+                    slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id,
+                                                                               segmentation_folder=seg_folder,
+                                                                               slices_random=False,
+                                                                               translate_rotate_augmentation=False,
+                                                                               elastic_augmentation=False,
+                                                                               slices=num_slices,
+                                                                               segmentation_region_depth=5 if use_3d_prediction else 1)
+                else:
+                    slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id,
+                                                                         segmentation_folder=seg_folder,
+                                                                         slices_random=False,
                                                                          translate_rotate_augmentation=False,
                                                                          elastic_augmentation=False,
-                                                                         segmentation_region_depth=5 if use_3d_prediction else 1)
-                else:
-                    slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, slices_random=False,
-                                                                         translate_rotate_augmentation=False, elastic_augmentation=False,
+                                                                         slices=num_slices,
                                                                          segmentation_region_depth=5 if use_3d_prediction else 1)
 
                 loss, tp_per_class, tn_per_class, fp_per_class, \
@@ -263,9 +288,11 @@ if __name__ == "__main__":
     validation_entries = np.array(validation_entries)
     print("Training dataset: {}".format(train_dset_name))
     print("Validation dataset: {}".format(val_dset_name))
-    with_segmentations = set(segmentation_expert_reviewed_manager.get_patients_with_expert_segmentation())
-    assert set(training_entries).issubset(with_segmentations), "Some training entries do not have expert segmentations."
-    assert set(validation_entries).issubset(with_segmentations), "Some validation entries do not have expert segmentations."
+
+    for patient_id in training_entries:
+        assert manager_segmentations.patient_has_expert_segmentations(patient_id) or manager_segmentations.patient_has_TSM_segmentations(patient_id), "Patient {} has no expert or TSM segmentations.".format(patient_id)
+    for patient_id in validation_entries:
+        assert manager_segmentations.patient_has_expert_segmentations(patient_id) or manager_segmentations.patient_has_TSM_segmentations(patient_id), "Patient {} has no expert or TSM segmentations.".format(patient_id)
 
     # initialize gpu
     config.parse_args(args)
@@ -337,9 +364,13 @@ if __name__ == "__main__":
                                                          last_channels=channel_progression[-1],
                                                          feature_width=18, feature_height=16)
         tensor_2d3d = (0, 2, 3, 4)
+        bowel_mask_tensor = torch.tensor([1, 1, 1, 0], dtype=torch.float32, device=config.device)\
+                                .unsqueeze(0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
     else:
         model = model_3d_patch_resnet.LocalizedROINet(backbone = backbone, num_channels=channel_progression[-1])
         tensor_2d3d = (0, 2, 3)
+        bowel_mask_tensor = torch.tensor([1, 1, 1, 0], dtype=torch.float32, device=config.device) \
+                                .unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
     model = model.to(config.device)
 
     print("Learning rate: " + str(learning_rate))

@@ -50,6 +50,7 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 # get info
                 patient_id = str(load_info["patient_id"])
                 series_id = str(load_info["series_id"])
+                segmentation_folder = str(load_info["segmentation_folder"])
                 slice_locs = np.array(load_info["slices"])
                 slice_center = load_info["slice_center"]
                 elastic_augmentation = load_info["elastic_augmentation"]
@@ -62,7 +63,7 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 original_height = image_slice.shape[1]
                 original_width = image_slice.shape[2]
 
-                with h5py.File(os.path.join("data_segmentation_hdf_cropped", str(series_id) + ".hdf5"), "r") as f:
+                with h5py.File(os.path.join(segmentation_folder, str(series_id) + ".hdf5"), "r") as f:
                     segmentation_3D_image = f["segmentation_arr"]
                     if not use_3d:
                         segmentation_raw = segmentation_3D_image[slice_center, ...].astype(dtype=bool)
@@ -188,10 +189,11 @@ class SliceLoaderWorker:
         self.seg_shared_memory.close()
         self.seg_shared_memory.unlink()
 
-    def request_load_image(self, patient_id, series_id, slices: list[int], slice_center: int, elastic_augmentation: bool):
+    def request_load_image(self, patient_id, series_id, segmentation_folder: str, slices: list[int], slice_center: int, elastic_augmentation: bool):
         self.image_loading_pipe_send.send({
             "patient_id": patient_id,
             "series_id": series_id,
+            "segmentation_folder": segmentation_folder,
             "slices": slices,
             "slice_center": slice_center,
             "elastic_augmentation": elastic_augmentation
@@ -228,6 +230,7 @@ def clean_and_destroy_ROI_sampler():
 
 def load_image(patient_id: str,
                series_id: str,
+               segmentation_folder: str,
                slices = 15,
                segmentation_region_depth = 1,
                slices_random=False,
@@ -276,11 +279,11 @@ def load_image(patient_id: str,
         slice_poses = np.clip(slice_poses, -slice_span[0], total_slices - 1 - slice_span[-1])
 
         # sample the images and the segmentation now
-        image = torch.zeros((slices, 1, loaded_temp_depth, original_height, original_width), dtype=torch.float32, device=config.device)
+        image = torch.zeros((slices, 1, loaded_temp_depth, original_height, original_width), dtype=torch.float32)
         if segmentation_region_depth == 1:
-            segmentations = torch.zeros((slices, 4, original_height, original_width), dtype=torch.float32, device=config.device)
+            segmentations = torch.zeros((slices, 4, original_height, original_width), dtype=torch.float32)
         else:
-            segmentations = torch.zeros((slices, 4, loaded_temp_depth, original_height, original_width), dtype=torch.float32, device=config.device)
+            segmentations = torch.zeros((slices, 4, loaded_temp_depth, original_height, original_width), dtype=torch.float32)
 
         worker_used = 0
         for k in range(slices):
@@ -297,14 +300,14 @@ def load_image(patient_id: str,
                     cur_slice_depths = np.clip(cur_slice_depths, min_slice, max_slice)
                     cur_slice_depths[slice_region_radius] = slice_pos # make sure the center is the same
 
-            loader_workers[worker_used % num_loader_workers].request_load_image(patient_id, series_id, list(cur_slice_depths), slice_pos, elastic_augmentation=elastic_augmentation)
+            loader_workers[worker_used % num_loader_workers].request_load_image(patient_id, series_id, segmentation_folder, list(cur_slice_depths), slice_pos, elastic_augmentation=elastic_augmentation)
             worker_used += 1
 
         worker_used = 0
         for k in range(slices):
             image_slice, segmentation_slice = loader_workers[worker_used % num_loader_workers].get_requested_image()
-            image[k, 0, ...].copy_(torch.from_numpy(image_slice), non_blocking=True)
-            segmentations[k, ...].copy_(torch.from_numpy(segmentation_slice), non_blocking=True)
+            image[k, 0, ...].copy_(torch.from_numpy(image_slice))
+            segmentations[k, ...].copy_(torch.from_numpy(segmentation_slice))
             worker_used += 1
 
         # reshape the depth dimension if contracted
