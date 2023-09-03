@@ -7,7 +7,7 @@ import cv2
 
 def to_class_array(dcm: pydicom.dataset.FileDataset, segmentation_arr: np.ndarray) -> np.ndarray:
     """
-    Convert segmentation array to class array.
+    Convert segmentation array to class array, reorient correctly and then resize.
     """
     segmentation_arr = segmentation_arr.astype(np.uint8).transpose(2, 0, 1)
     segmentation_arr = segmentation_arr[::-1, ...]
@@ -26,3 +26,8 @@ def to_class_array(dcm: pydicom.dataset.FileDataset, segmentation_arr: np.ndarra
             result_arr[k, :, :, i] = (cv2.resize(segmentation_arr[k, :, :, i], (new_shape[1], new_shape[0])) > 0).astype(np.uint8)
 
     return result_arr
+
+def translate_labels(segmentation_arr: np.ndarray) -> np.ndarray:
+    return (segmentation_arr == 5).astype(np.uint8) + (segmentation_arr == 1).astype(np.uint8) * 2 \
+    + (segmentation_arr == 3).astype(np.uint8) * 3 + (segmentation_arr == 2).astype(np.uint8) * 4 + (
+                (segmentation_arr >= 55) & (segmentation_arr <= 57)).astype(np.uint8) * 5

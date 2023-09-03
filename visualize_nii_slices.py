@@ -121,30 +121,31 @@ if __name__ == "__main__":
     nii_file1, _ = QFileDialog.getOpenFileName(None, "Select the first nii file", "", "Nifti Files (*.nii)")
     if not nii_file1:
         exit(0)
-    nii_file2, _ = QFileDialog.getOpenFileName(None, "Select the second nii file", "", "Nifti Files (*.nii)")
-    if not nii_file2:
+    hdf_file2, _ = QFileDialog.getOpenFileName(None, "Select the second hdf file", "", "HDF Files (*.hdf5)")
+    if not hdf_file2:
         exit(0)
 
     # load the nii file
     nii_image1 = np.array(nibabel.load(nii_file1).get_fdata()).transpose(2, 0, 1).astype(np.uint8)
-    nii_image2 = np.array(nibabel.load(nii_file2).get_fdata()).transpose(2, 0, 1).astype(np.uint8)
-    if not nii_image1.shape == nii_image2.shape:
+    with h5py.File(hdf_file2, "r") as f:
+        hdf_image2 = np.array(f["segmentation_labels"]).transpose(2, 0, 1).astype(np.uint8)
+    if not nii_image1.shape == hdf_image2.shape:
         # open prompt "The two nii files have different shapes. Exiting."
         QMessageBox.critical(None, "Error", "The two nii files have different shapes. Exiting.")
         exit(0)
 
     nii_image1 = nii_image1[::-1, ...]
-    nii_image2 = nii_image2[::-1, ...]
+    hdf_image2 = hdf_image2[::-1, ...]
     nii_image1 = np.rot90(nii_image1, axes=(1, 2), k=1)
-    nii_image2 = np.rot90(nii_image2, axes=(1, 2), k=1)
+    hdf_image2 = np.rot90(hdf_image2, axes=(1, 2), k=1)
 
     # convert image2 labels
-    nii_image2 = (nii_image2 == 5).astype(np.uint8) + (nii_image2 == 1).astype(np.uint8) * 2\
-                    + (nii_image2 == 3).astype(np.uint8) * 3 + (nii_image2 == 2).astype(np.uint8) * 4 + ((nii_image2 >= 55) & (nii_image2 <= 57)).astype(np.uint8) * 5
+    hdf_image2 = (hdf_image2 == 5).astype(np.uint8) + (hdf_image2 == 1).astype(np.uint8) * 2\
+                    + (hdf_image2 == 3).astype(np.uint8) * 3 + (hdf_image2 == 2).astype(np.uint8) * 4 + ((hdf_image2 >= 55) & (hdf_image2 <= 57)).astype(np.uint8) * 5
 
     # convert to color
     seg1 = convert_segmentation_to_color(nii_image1)
-    seg2 = convert_segmentation_to_color(nii_image2)
+    seg2 = convert_segmentation_to_color(hdf_image2)
 
     window = DualSegmentationViewer(seg1, seg2)
     window.show()
