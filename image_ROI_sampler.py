@@ -196,4 +196,4 @@ def load_image(patient_id: str,
         else:
             segmentations = torch.nn.functional.max_pool2d(segmentations.view(slices, 4 * segmentation_region_depth, 512, 576),
                                                 kernel_size=32, stride=32).view(slices, 4, segmentation_region_depth, 16, 18)
-    return image, segmentations
+    return image.to(device=config.device), segmentations.to(device=config.device)
