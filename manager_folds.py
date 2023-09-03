@@ -219,7 +219,7 @@ if __name__ == "__main__":
             {"bowel": True, "extravasation": True, "kidney": True, "liver": True, "spleen": True})
 
         # get and check segmentation data
-        patients_with_expert_segmentation = manager_segmentations.get_patients_with_expert_segmentation()
+        patients_with_expert_segmentation = [int(x) for x in manager_segmentations.get_patients_with_expert_segmentation()]
         patients_with_TSM_segmentation = [int(x) for x in manager_segmentations.get_patients_with_TSM_segmentation() if int(x) != 15472]
 
         # restrict to those with segmentations and split
@@ -228,5 +228,5 @@ if __name__ == "__main__":
         for k, (train_idx, val_idx) in enumerate(kfold.split(summary, summary)):
             train_data = summary.iloc[train_idx].index
             val_data = summary.iloc[val_idx].index
-            save_dataset("segmentation_fold{}_train".format(k), [int(patient_id) for patient_id in train_data] + patients_with_TSM_segmentation)
-            save_dataset("segmentation_fold{}_val".format(k), [int(patient_id) for patient_id in val_data])
+            save_dataset("segmentation_extra_fold{}_train".format(k), [int(patient_id) for patient_id in train_data] + patients_with_TSM_segmentation)
+            save_dataset("segmentation_extra_fold{}_val".format(k), [int(patient_id) for patient_id in val_data])
