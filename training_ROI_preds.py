@@ -402,7 +402,7 @@ if __name__ == "__main__":
                 g["momentum"] = momentum
 
     model_config = {
-        "model": "Multilabel classifier",
+        "model": "Organ ROI classifier",
         "epochs": epochs,
         "learning_rate": learning_rate,
         "momentum": momentum,

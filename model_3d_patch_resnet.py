@@ -538,6 +538,31 @@ class LocalizedROINet(torch.nn.Module):
         x = self.outconv(x)
         return x
 
+class SupervisedAttentionLinearLayer(torch.nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super(SupervisedAttentionLinearLayer, self).__init__()
+
+        self.attention = torch.nn.Conv2d(in_channels, 4, kernel_size=1, bias=True)
+        self.midconv = torch.nn.Conv2d(in_channels, out_channels * 4, kernel_size=1, bias=False)
+        self.mid_norm = torch.nn.InstanceNorm2d(out_channels * 4, affine=True)
+        self.mid_nonlin = torch.nn.GELU()
+
+        self.mid_bias = torch.nn.Parameter(torch.zeros(4, out_channels), requires_grad=True)
+
+    def forward(self, x):
+        N, C, H, W = x.shape
+
+        roi_logits = self.attention(x)
+        feature_attention = torch.sigmoid(roi_logits)
+
+        x = self.midconv(x)
+        x = self.mid_norm(x)
+        x = self.mid_nonlin(x).view(N, 4, -1, H, W)
+        x = ((torch.sum(x * feature_attention.unsqueeze(2), dim=(-1, -2)) + self.mid_bias) /
+                torch.sum(feature_attention, dim=(-1, -2)).unsqueeze(2) + 1.0)
+
+        return x, roi_logits
+
 
 class ResConv2DDoubleDownsampleBlock(torch.nn.Module):
     def __init__(self, in_channels, mid_channels, out_channels):
@@ -552,14 +577,14 @@ class ResConv2DDoubleDownsampleBlock(torch.nn.Module):
 
         self.avgpool = torch.nn.AvgPool3d(kernel_size=(1, 4, 4), stride=(1, 4, 4), padding=0)
 
-        # 3 -> 3 kernel
-        self.conv1 = torch.nn.Conv3d(in_channels, mid_channels, kernel_size=(1, 3, 3), stride=(1, 2, 2),
-                                     bias=False, padding=0)
+        # 6 -> 6 kernel for aggressive downsampling
+        self.conv1 = torch.nn.Conv3d(in_channels, mid_channels, kernel_size=(1, 6, 6), stride=(1, 2, 2),
+                                     bias=False, padding=(0, 2, 2), padding_mode="replicate")
         self.batchnorm1 = torch.nn.InstanceNorm3d(mid_channels, affine=True)
         self.nonlin1 = torch.nn.GELU()
 
-        self.conv2 = torch.nn.Conv3d(mid_channels, out_channels, kernel_size=(1, 3, 3), stride=(1, 2, 2),
-                                     bias=False, padding=0)
+        self.conv2 = torch.nn.Conv3d(mid_channels, out_channels, kernel_size=(1, 6, 6), stride=(1, 2, 2),
+                                     bias=False, padding=(0, 2, 2), padding_mode="replicate")
         self.batchnorm2 = torch.nn.InstanceNorm3d(out_channels, affine=True)
         self.nonlin2 = torch.nn.GELU()
 
@@ -577,12 +602,12 @@ class ResConv2DDoubleDownsampleBlock(torch.nn.Module):
             x_init = x
         x_init = self.avgpool(x_init)
 
-        x = self.conv1(torch.nn.functional.pad(x, (1, 0, 1, 0, 0, 0), "reflect"))
+        x = self.conv1(x)
         x = self.batchnorm1(x)
         x = self.nonlin1(x)
         assert x.shape == (N, self.mid_channels, D, H // 2, W // 2)
 
-        x = self.conv2(torch.nn.functional.pad(x, (1, 0, 1, 0, 0, 0), "reflect"))
+        x = self.conv2(x)
         x = self.batchnorm2(x)
         assert x.shape == (N, self.out_channels, D, H // 4, W // 4)
 
@@ -605,6 +630,19 @@ class NeighborhoodROINet(torch.nn.Module):
                        feature_width:int, feature_height:int):
         super(NeighborhoodROINet, self).__init__()
         self.backbone = backbone
+        self.head = NeighborhoodROILayer(first_channels, mid_channels, last_channels, feature_width, feature_height)
+        self.outconv = torch.nn.Conv3d(first_channels * 32, 4, kernel_size=1, bias=True)
+
+    def forward(self, x):
+        x = self.backbone(x)
+        x = self.head(x)
+        x = self.outconv(x)
+        return x
+
+class NeighborhoodROILayer(torch.nn.Module):
+    def __init__(self, first_channels:int, mid_channels:int, last_channels:int,
+                       feature_width:int, feature_height:int):
+        super(NeighborhoodROILayer, self).__init__()
         self.first_channels = first_channels
         self.mid_channels = mid_channels
         self.last_channels = last_channels
@@ -614,19 +652,23 @@ class NeighborhoodROINet(torch.nn.Module):
         self.spatial_contraction1 = ResConvQuadDownsample(first_channels)
         self.spatial_contraction2 = ResConvQuadDownsample(mid_channels)
 
-        self.downconv1 = torch.nn.Conv3d(last_channels, mid_channels * 16, kernel_size=1, bias=False)
+        self.downconv1 = torch.nn.Conv3d(last_channels, mid_channels * 16, kernel_size=(1, 3, 3), bias=False,
+                                         padding=(0, 1, 1), padding_mode="replicate")
         self.batchnorm1 = torch.nn.InstanceNorm3d(mid_channels * 32, affine=True)
         self.nonlin1 = torch.nn.GELU()
 
-        self.downconv2 = torch.nn.Conv3d(mid_channels * 32, first_channels * 16, kernel_size=1, bias=False)
+        self.downconv2 = torch.nn.Conv3d(mid_channels * 32, first_channels * 16, kernel_size=(1, 3, 3), bias=False,
+                                         padding=(0, 1, 1), padding_mode="replicate")
         self.upsample2 = torch.nn.Upsample(size=(5, feature_height, feature_width), mode="trilinear", align_corners=False)
         self.batchnorm2 = torch.nn.InstanceNorm3d(first_channels * 32, affine=True)
         self.nonlin2 = torch.nn.GELU()
 
-        self.outconv = torch.nn.Conv3d(first_channels * 32, 4, kernel_size=1, bias=True)
+        self.downconv3 = torch.nn.Conv3d(first_channels * 32, first_channels * 16, kernel_size=(1, 3, 3), bias=False,
+                                         padding=(0, 1, 1), padding_mode="replicate")
+        self.batchnorm3 = torch.nn.InstanceNorm3d(first_channels * 16, affine=True)
+        self.nonlin3 = torch.nn.GELU()
 
     def forward(self, x):
-        x = self.backbone(x) # contracting
         x_first = self.spatial_contraction1(x[0])
         x_mid = self.spatial_contraction2(x[1])
         x_last = x[2]
@@ -646,4 +688,130 @@ class NeighborhoodROINet(torch.nn.Module):
         x = self.batchnorm2(x)
         x = self.nonlin2(x)
 
-        return self.outconv(x)
+        x = self.downconv3(x)
+        x = self.batchnorm3(x)
+        x = self.nonlin3(x)
+
+        return x
+
+class SupervisedAttentionLinearLayer3D(torch.nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super(SupervisedAttentionLinearLayer3D, self).__init__()
+
+        self.attention = torch.nn.Conv3d(in_channels, 4, kernel_size=1, bias=True)
+        self.midconv = torch.nn.Conv3d(in_channels, out_channels * 4, kernel_size=1, bias=False)
+        self.mid_norm = torch.nn.InstanceNorm3d(out_channels * 4, affine=True)
+        self.mid_nonlin = torch.nn.GELU()
+
+        self.mid_bias = torch.nn.Parameter(torch.zeros(4, out_channels), requires_grad=True)
+
+    def forward(self, x):
+        N, C, D, H, W = x.shape
+
+        roi_logits = self.attention(x)
+        feature_attention = torch.sigmoid(roi_logits)
+
+        x = self.midconv(x)
+        x = self.mid_norm(x)
+        x = self.mid_nonlin(x).view(N, 4, -1, D, H, W)
+        x = ((torch.sum(x * feature_attention.unsqueeze(2), dim=(-1, -2, -3)) + self.mid_bias) /
+                torch.sum(feature_attention, dim=(-1, -2, -3)).unsqueeze(2) + 1.0)
+
+        return x, roi_logits
+
+class ClassifierNeck(torch.nn.Module):
+    def __init__(self, in_channels: int, classification_levels: list[int]):
+        super(ClassifierNeck, self).__init__()
+        assert len(classification_levels) == 4, "There must be 4 classification heads, for liver, spleen, kidney, bowel"
+        for k in classification_levels:
+            assert k in [1, 2], "The classification levels must be between 1 and 2"
+
+        self.outconvs = torch.nn.ModuleList()
+        for k in classification_levels:
+            if k == 1:
+                self.outconvs.append(torch.nn.Linear(in_channels, 1, bias=True))
+            else:
+                self.outconvs.append(torch.nn.Linear(in_channels, 3, bias=True))
+
+    def forward(self, x):
+        outputs = []
+        for k in range(4):
+            outputs.append(self.outconvs[k](x[:, k, :]))
+        return outputs
+
+class MeanProbaReductionHead(torch.nn.Module):
+    def __init__(self, classification_levels: list[int]):
+        super(MeanProbaReductionHead, self).__init__()
+        assert len(classification_levels) == 4, "There must be 4 classification heads, for liver, spleen, kidney, bowel"
+        for k in classification_levels:
+            assert k in [1, 2], "The classification levels must be between 1 and 2"
+
+        self.classification_levels = classification_levels
+
+    def forward(self, x):
+        outputs = []
+        for k in range(4):
+            if self.classification_levels[k] == 1:
+                outputs.append(torch.mean(torch.sigmoid(x[k]), dim=0))
+            else:
+                outputs.append(torch.mean(torch.softmax(x[k], dim=1), dim=0))
+        return outputs
+
+class UnionProbaReductionHead(torch.nn.Module):
+    def __init__(self, classification_levels: list[int]):
+        super(UnionProbaReductionHead, self).__init__()
+        assert len(classification_levels) == 4, "There must be 4 classification heads, for liver, spleen, kidney, bowel"
+        for k in classification_levels:
+            assert k in [1, 2], "The classification levels must be between 1 and 2"
+
+        self.classification_levels = classification_levels
+
+    def forward(self, x):
+        outputs = []
+        for k in range(4):
+            if self.classification_levels[k] == 1:
+                outputs.append(1 - torch.prod(1 - torch.sigmoid(x[k]), dim=0))
+            else:
+                
+                outputs.append(torch.softmax(torch.mean(x[k], dim=0), dim=0))
+        return outputs
+
+class SupervisedAttentionClassifier(torch.nn.Module):
+    def __init__(self, backbone: torch.nn.Module, backbone_out_channels: int, conv_hidden_channels: int,
+                 classification_levels: list[int], reduction="mean"):
+        super(SupervisedAttentionClassifier, self).__init__()
+
+        self.backbone = backbone
+        self.backbone_out_channels = backbone_out_channels
+        self.conv_hidden_channels = conv_hidden_channels
+
+        self.attention_layer = SupervisedAttentionLinearLayer(backbone_out_channels, conv_hidden_channels)
+        self.classifier_neck = ClassifierNeck(conv_hidden_channels, classification_levels)
+
+    def forward(self, x):
+        x = self.backbone(x)
+        x, roi_logits = self.attention_layer(x)
+        x = self.classifier_neck(x)
+
+        return x, roi_logits
+
+class SupervisedAttentionClassifier3D(torch.nn.Module):
+    def __init__(self, backbone: torch.nn.Module, backbone_first_channels:int, backbone_mid_channels:int, backbone_last_channels:int,
+                       backbone_feature_width:int, backbone_feature_height:int, conv_hidden_channels: int,
+                 classification_levels: list[int]):
+        super(SupervisedAttentionClassifier3D, self).__init__()
+
+        self.backbone = backbone
+
+        self.ushaped_neck = NeighborhoodROILayer(backbone_first_channels, backbone_mid_channels, backbone_last_channels,
+                                                 backbone_feature_width, backbone_feature_height)
+        self.attention_layer = SupervisedAttentionLinearLayer3D(backbone_first_channels * 16, conv_hidden_channels)
+        self.classifier_neck = ClassifierNeck(conv_hidden_channels, classification_levels)
+
+    def forward(self, x):
+        x = self.backbone(x)
+        x = self.ushaped_neck(x)
+        x, roi_logits = self.attention_layer(x)
+        x = self.classifier_neck(x)
+
+        return x, roi_logits
