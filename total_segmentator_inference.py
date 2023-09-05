@@ -29,7 +29,7 @@ def save_segmentation(series_folder: str, out_file: str, convert_labels=True):
         f.create_dataset("segmentation_labels", data=segmentations, dtype=np.uint8, compression="gzip", compression_opts=0)
 
 def save_inverted_segmentation(series_folder: str, out_file: str, convert_labels=True):
-    if not os.path.isfile(temp_series_folder):
+    if not os.path.isdir(temp_series_folder):
         os.mkdir(temp_series_folder)
 
     series_ids = [int(x[:-4]) for x in os.listdir(series_folder)]
