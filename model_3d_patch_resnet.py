@@ -631,7 +631,7 @@ class NeighborhoodROINet(torch.nn.Module):
         super(NeighborhoodROINet, self).__init__()
         self.backbone = backbone
         self.head = NeighborhoodROILayer(first_channels, mid_channels, last_channels, feature_width, feature_height)
-        self.outconv = torch.nn.Conv3d(first_channels * 32, 4, kernel_size=1, bias=True)
+        self.outconv = torch.nn.Conv3d(first_channels * 16, 4, kernel_size=1, bias=True)
 
     def forward(self, x):
         x = self.backbone(x)

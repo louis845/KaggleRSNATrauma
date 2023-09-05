@@ -96,7 +96,7 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                     else:
                         # 3d elastic deformation (varying 2d elastic deformation over depth)
                         displacement_field = image_sampler_augmentations.generate_displacement_field3D(original_width, original_height,
-                                                                                            slice_region_depth, [0.3, 0.7, 1, 0.7, 0.3])
+                                                                                            max_slice_region_depth, [0.3, 0.7, 1, 0.7, 0.3])
                         displacement_field = torch.from_numpy(displacement_field)
                         image_slice = image_sampler_augmentations.apply_displacement_field3D(image_slice, displacement_field)
                         if use_3d:
@@ -302,7 +302,8 @@ def load_image(patient_id: str,
                     cur_slice_depths = np.clip(cur_slice_depths, min_slice, max_slice)
                     cur_slice_depths[slice_region_radius] = slice_pos # make sure the center is the same
 
-            loader_workers[worker_used % num_loader_workers].request_load_image(patient_id, series_id, segmentation_folder, list(cur_slice_depths), slice_pos, elastic_augmentation=elastic_augmentation)
+            loader_workers[worker_used % num_loader_workers].request_load_image(patient_id, series_id, segmentation_folder, list(cur_slice_depths), slice_pos, elastic_augmentation=elastic_augmentation,
+                                                                                contracted=contracted)
             worker_used += 1
 
         worker_used = 0

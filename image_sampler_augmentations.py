@@ -63,7 +63,7 @@ def apply_displacement_field(image: torch.Tensor, displacement_field: torch.Tens
     assert image.shape[-1] == displacement_field.shape[2], "The image and displacement field must have the same width."
     img_shape = image.shape
 
-    image = torchvision.transforms.functional.elastic_transform(image.view(-1, 1, img_shape[-2], img_shape[-1]),
+    image = torchvision.transforms.functional.elastic_transform(image.reshape(-1, 1, img_shape[-2], img_shape[-1]),
                 displacement_field, interpolation=torchvision.transforms.InterpolationMode.NEAREST)
     return image.view(img_shape)
 
@@ -142,10 +142,10 @@ def apply_displacement_field3D(image: torch.Tensor, displacement_field: torch.Te
     assert image.shape[-1] == displacement_field.shape[2], "The image and displacement field must have the same width."
     assert image.shape[-3] == displacement_field.shape[0], "The image and displacement field must have the same depth."
 
-    for d in image.shape[-3]:
+    for d in range(int(image.shape[-3])):
         slice = image[..., d, :, :]
         slice_shape = slice.shape
-        image[..., d, :, :].copy_(torchvision.transforms.functional.elastic_transform(slice.view(-1, 1, slice_shape[-2], slice_shape[-1]),
+        image[..., d, :, :].copy_(torchvision.transforms.functional.elastic_transform(slice.reshape(-1, 1, slice_shape[-2], slice_shape[-1]),
                 displacement_field[d, ...].unsqueeze(0), interpolation=torchvision.transforms.InterpolationMode.NEAREST).view(slice_shape), non_blocking=True)
     return image
 
