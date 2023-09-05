@@ -144,14 +144,14 @@ if __name__ == "__main__":
     TSM_segmentations = [x for x in TSM_segmentations if x not in expert_segmentations]
     for series_id in tqdm.tqdm(expert_segmentations):
         file = os.path.join(SEGMENTATION_LABELS_FOLDER, "{}.npy".format(series_id))
-        if not os.path.exists(file):
+        if not os.path.exists(file): # if already generated, skip
             patient_id = series_meta.loc[series_id, "patient_id"]
             injury_labels = get_segmentation_injury_labels(str(patient_id), str(series_id), True)
             np.save(file, injury_labels)
 
     for series_id in tqdm.tqdm(TSM_segmentations):
         file = os.path.join(SEGMENTATION_LABELS_FOLDER, "{}.npy".format(series_id))
-        if not os.path.exists(file):
+        if not os.path.exists(file): # if already generated, skip
             patient_id = series_meta.loc[series_id, "patient_id"]
             injury_labels = get_segmentation_injury_labels(str(patient_id), str(series_id), False)
             np.save(file, injury_labels)

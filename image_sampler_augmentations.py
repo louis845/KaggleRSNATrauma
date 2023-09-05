@@ -1,5 +1,7 @@
 import numpy as np
 import cv2
+import torch
+import torchvision.transforms.functional
 
 
 def apply_random_shear(displacement_field, xory, image_width, image_height, magnitude_low, magnitude_high):
@@ -30,7 +32,7 @@ def apply_random_shear(displacement_field, xory, image_width, image_height, magn
         displacement_field[0, y - expand_top:y + expand_bottom, x - expand_left:x + expand_right, 1:2] += \
             kernel[kernel_height - expand_top:kernel_height + expand_bottom, kernel_width - expand_left:kernel_width + expand_right, :]
 
-def generate_displacement_field(image_width, image_height, num_kernels=7):
+def generate_displacement_field(image_width, image_height, num_kernels=7) -> np.ndarray:
     displacement_field = np.zeros(shape=(1, image_height, image_width, 2), dtype=np.float32)
 
     type = np.random.choice(3)
@@ -47,6 +49,69 @@ def generate_displacement_field(image_width, image_height, num_kernels=7):
     for k in range(num_kernels):
         apply_random_shear(displacement_field, xory="x", image_width=image_width, image_height=image_height, magnitude_low=magnitude_low, magnitude_high=magnitude_high)
         apply_random_shear(displacement_field, xory="y", image_width=image_width, image_height=image_height, magnitude_low=magnitude_low, magnitude_high=magnitude_high)
+
+    return displacement_field
+
+def apply_displacement_field(image: torch.Tensor, displacement_field: torch.Tensor):
+    """
+    Apply a displacement field to an image.
+    :param image: The image to apply the displacement field to. The image should have shape (..., H, W)
+    :param displacement_field: The displacement field to apply. The displacement field should have shape (1, H, W, 2)
+    :return: The image with the displacement field applied.
+    """
+    assert image.shape[-2] == displacement_field.shape[1], "The image and displacement field must have the same height."
+    assert image.shape[-1] == displacement_field.shape[2], "The image and displacement field must have the same width."
+    img_shape = image.shape
+
+    image = torchvision.transforms.functional.elastic_transform(image.view(-1, 1, img_shape[-2], img_shape[-1]),
+                displacement_field, interpolation=torchvision.transforms.InterpolationMode.NEAREST)
+    return image.view(img_shape)
+
+def apply_random_shear3D(displacement_field, xory, image_width, image_height, magnitude_low, magnitude_high):
+    x_low = image_width // 3
+    x_high = image_width * 2 // 3
+    y_low = image_height // 3
+    y_high = image_height * 2 // 3
+
+    x = np.random.randint(low=x_low, high=x_high + 1)
+    y = np.random.randint(low=y_low, high=y_high + 1)
+    sigma = np.random.uniform(low=100.0, high=200.0)
+    magnitude = np.random.uniform(low=magnitude_low, high=magnitude_high) * np.random.choice([-1, 1])
+
+    kernel_width = image_width
+    kernel_height = image_height
+    kernel = np.expand_dims(cv2.getGaussianKernel(ksize=kernel_height * 2 + 1, sigma=sigma), axis=-1)\
+             * cv2.getGaussianKernel(ksize=kernel_width * 2 + 1, sigma=sigma) * magnitude
+
+    expand_left = min(kernel_width, x)
+    expand_right = min(kernel_width + 1, image_width - x)
+    expand_top = min(kernel_height, y)
+    expand_bottom = min(kernel_height + 1, image_height - y)
+
+    if xory == "x":
+        displacement_field[0, y - expand_top:y + expand_bottom, x - expand_left:x + expand_right, 0:1] += \
+            kernel[kernel_height - expand_top:kernel_height + expand_bottom, kernel_width - expand_left:kernel_width + expand_right, :]
+    else:
+        displacement_field[0, y - expand_top:y + expand_bottom, x - expand_left:x + expand_right, 1:2] += \
+            kernel[kernel_height - expand_top:kernel_height + expand_bottom, kernel_width - expand_left:kernel_width + expand_right, :]
+
+def generate_displacement_field3D(image_width, image_height, image_depth, kernel_depth_span, num_kernels=7) -> np.ndarray:
+    displacement_field = np.zeros(shape=(image_depth, image_height, image_width, 2), dtype=np.float32)
+
+    type = np.random.choice(3)
+    if type == 0:
+        magnitude_low = 0.0
+        magnitude_high = 1000.0
+    elif type == 1:
+        magnitude_low = 1000.0
+        magnitude_high = 4000.0
+    elif type == 2:
+        magnitude_low = 4000.0
+        magnitude_high = 7000.0
+
+    for k in range(num_kernels):
+        apply_random_shear3D(displacement_field, xory="x", image_width=image_width, image_height=image_height, magnitude_low=magnitude_low, magnitude_high=magnitude_high)
+        apply_random_shear3D(displacement_field, xory="y", image_width=image_width, image_height=image_height, magnitude_low=magnitude_low, magnitude_high=magnitude_high)
 
     return displacement_field
 

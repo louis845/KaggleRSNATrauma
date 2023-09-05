@@ -23,6 +23,8 @@ import metrics
 import image_ROI_sampler
 import image_ROI_sampler_async
 import manager_segmentations
+import training_shuffle_utils
+
 
 class MetricKeys:
     LOSS = "loss"
@@ -60,11 +62,23 @@ class MetricKeys:
         else:
             raise ValueError("Invalid class code")
 
-bowel_mask_tensor = None # to be initialized with tensor_2d3d
+
+def get_representing_shuffle_entry(patient_id: int):
+    return {"patient_id": patient_id}
+
+
+def get_patient_id_from_shuffle_entry(shuffle_entry: dict) -> int:
+    return shuffle_entry["patient_id"]
+
+
+bowel_mask_tensor = None  # to be initialized with tensor_2d3d
+
+
 # focal loss with exponent 2
 def focal_loss(output: torch.Tensor, target: torch.Tensor, reduce_channels=True, include_bowel=True):
     # logsumexp trick for numerical stability
-    binary_ce = torch.nn.functional.binary_cross_entropy_with_logits(output, target, reduction="none") * (1 + target * (positive_weight - 1))
+    binary_ce = torch.nn.functional.binary_cross_entropy_with_logits(output, target, reduction="none") * (
+                1 + target * (positive_weight - 1))
     if not include_bowel:
         binary_ce = binary_ce * bowel_mask_tensor
     if reduce_channels:
@@ -72,13 +86,17 @@ def focal_loss(output: torch.Tensor, target: torch.Tensor, reduce_channels=True,
     else:
         return torch.mean(((target - torch.sigmoid(output)) ** 2) * binary_ce, dim=tensor_2d3d)
 
+
 def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
-                         slices_: torch.Tensor, segmentations_: torch.Tensor, include_bowel: bool):
+                         slices_: torch.Tensor, segmentations_: torch.Tensor, is_expert: bool):
     optimizer_.zero_grad()
     pred_segmentations = model_(slices_)
     with torch.no_grad():
         preds = (pred_segmentations > 0).to(torch.float32)
-    loss = focal_loss(pred_segmentations, segmentations_, reduce_channels=True, include_bowel=include_bowel)
+    # we include the bowel only for expert segmentations, and penalize non-expert segmentations only half as much
+    loss = focal_loss(pred_segmentations, segmentations_, reduce_channels=True, include_bowel=is_expert)
+    if not is_expert:
+        loss = loss * 0.5
     loss.backward()
     optimizer.step()
 
@@ -96,6 +114,7 @@ def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimi
         loss_per_class = focal_loss(pred_segmentations, segmentations_, reduce_channels=False)
 
     return loss, tp_per_class, tn_per_class, fp_per_class, fn_per_class, loss_per_class
+
 
 def single_validation_step(model_: torch.nn.Module,
                            slices_: torch.Tensor,
@@ -118,19 +137,20 @@ def single_validation_step(model_: torch.nn.Module,
 
     return loss, tp_per_class, tn_per_class, fp_per_class, fn_per_class, loss_per_class
 
-def training_step(record:bool):
+
+def training_step(record: bool):
     if record:
         for key in train_metrics:
             train_metrics[key].reset()
 
     # shuffle
-    training_entries_shuffle = np.random.permutation(training_entries)
+    shuffle_indices = training_entries.get_random_shuffle_indices()
 
     # training
     trained = 0
-    with tqdm.tqdm(total=len(training_entries)) as pbar:
-        while trained < len(training_entries):
-            patient_id = training_entries_shuffle[trained] # patient id
+    with tqdm.tqdm(total=len(shuffle_indices)) as pbar:
+        while trained < len(shuffle_indices):
+            patient_id = get_patient_id_from_shuffle_entry(training_entries[shuffle_indices[trained]])  # patient id
             if manager_segmentations.patient_has_expert_segmentations(patient_id):
                 series_id = str(manager_segmentations.randomly_pick_expert_segmentation(patient_id))
                 is_expert = True
@@ -140,21 +160,25 @@ def training_step(record:bool):
                 is_expert = False
                 seg_folder = manager_segmentations.TSM_SEGMENTATION_FOLDER
             if use_async_sampler:
-                slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id, segmentation_folder=seg_folder,
+                slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id,
+                                                                           segmentation_folder=seg_folder,
+                                                                           slices_random=not disable_random_slices,
+                                                                           translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                                           elastic_augmentation=not disable_elastic_augmentation,
+                                                                           slices=num_slices,
+                                                                           segmentation_region_depth=5 if use_3d_prediction else 1)
+            else:
+                slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id,
+                                                                     segmentation_folder=seg_folder,
                                                                      slices_random=not disable_random_slices,
                                                                      translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                                      elastic_augmentation=not disable_elastic_augmentation,
                                                                      slices=num_slices,
                                                                      segmentation_region_depth=5 if use_3d_prediction else 1)
-            else:
-                slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id, segmentation_folder=seg_folder,
-                                                                     slices_random=not disable_random_slices,
-                                                                     translate_rotate_augmentation=not disable_rotpos_augmentation,
-                                                                     elastic_augmentation=not disable_elastic_augmentation,
-                                                                     slices=num_slices, segmentation_region_depth=5 if use_3d_prediction else 1)
 
-            loss, tp_per_class, tn_per_class, fp_per_class,\
-                fn_per_class, loss_per_class = single_training_step_compile(model, optimizer, slices, segmentations, include_bowel=is_expert)
+            loss, tp_per_class, tn_per_class, fp_per_class, \
+                fn_per_class, loss_per_class = single_training_step_compile(model, optimizer, slices, segmentations,
+                                                                            is_expert=is_expert)
             loss = loss.item()
             tp_per_class = tp_per_class.cpu().numpy()
             tn_per_class = tn_per_class.cpu().numpy()
@@ -172,7 +196,7 @@ def training_step(record:bool):
                     organ_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=False)
                     train_metrics[organ_loss_key].add(loss_per_class[class_code], 1)
                     train_metrics[organ_key].add_direct(tp_per_class[class_code], tn_per_class[class_code],
-                                                 fp_per_class[class_code], fn_per_class[class_code])
+                                                        fp_per_class[class_code], fn_per_class[class_code])
                 train_metrics[MetricKeys.LOSS].add(loss, 1)
 
             trained += 1
@@ -185,6 +209,7 @@ def training_step(record:bool):
 
         for key in current_metrics:
             train_history[key].append(current_metrics[key])
+
 
 def validation_step():
     for key in val_metrics:
@@ -234,7 +259,7 @@ def validation_step():
                     organ_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=False)
                     val_metrics[organ_loss_key].add(loss_per_class[class_code], 1)
                     val_metrics[organ_key].add_direct(tp_per_class[class_code], tn_per_class[class_code],
-                                                        fp_per_class[class_code], fn_per_class[class_code])
+                                                      fp_per_class[class_code], fn_per_class[class_code])
                 val_metrics[MetricKeys.LOSS].add(loss, 1)
 
             validated += 1
@@ -247,6 +272,7 @@ def validation_step():
     for key in current_metrics:
         val_history[key].append(current_metrics[key])
 
+
 def print_history(metrics_history: collections.defaultdict[str, list]):
     for key in metrics_history:
         print("{}      {}".format(key, metrics_history[key][-1]))
@@ -258,23 +284,40 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a ROI prediction model.")
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs to train for. Default 100.")
     parser.add_argument("--learning_rate", type=float, default=3e-4, help="Learning rate to use. Default 3e-4.")
-    parser.add_argument("--momentum", type=float, default=0.9, help="Momentum to use. Default 0.9. This would be the momentum for SGD, and beta1 for Adam.")
-    parser.add_argument("--second_momentum", type=float, default=0.999, help="Second momentum to use. Default 0.999. This would be beta2 for Adam. Ignored if SGD.")
-    parser.add_argument("--disable_random_slices", action="store_true", help="Whether to disable random slices. Default False.")
-    parser.add_argument("--disable_rotpos_augmentation", action="store_true", help="Whether to disable rotation and translation augmentation. Default False.")
-    parser.add_argument("--disable_elastic_augmentation", action="store_true", help="Whether to disable elastic augmentation. Default False.")
+    parser.add_argument("--momentum", type=float, default=0.9,
+                        help="Momentum to use. Default 0.9. This would be the momentum for SGD, and beta1 for Adam.")
+    parser.add_argument("--second_momentum", type=float, default=0.999,
+                        help="Second momentum to use. Default 0.999. This would be beta2 for Adam. Ignored if SGD.")
+    parser.add_argument("--num_extra_nonexpert_training", type=int, default=0,
+                        help="Number of extra non-expert segmentations to use for training. Default 0.")
+    parser.add_argument("--disable_random_slices", action="store_true",
+                        help="Whether to disable random slices. Default False.")
+    parser.add_argument("--disable_rotpos_augmentation", action="store_true",
+                        help="Whether to disable rotation and translation augmentation. Default False.")
+    parser.add_argument("--disable_elastic_augmentation", action="store_true",
+                        help="Whether to disable elastic augmentation. Default False.")
     parser.add_argument("--num_slices", type=int, default=15, help="Number of slices to use. Default 15.")
-    parser.add_argument("--optimizer", type=str, default="adam", help="Which optimizer to use. Available options: adam, sgd. Default adam.")
+    parser.add_argument("--optimizer", type=str, default="adam",
+                        help="Which optimizer to use. Available options: adam, sgd. Default adam.")
     parser.add_argument("--epochs_per_save", type=int, default=2, help="Number of epochs between saves. Default 2.")
-    parser.add_argument("--channel_progression", type=int, nargs="+", default=[2, 3, 6, 9, 15, 32, 128, 256, 512, 1024], help="The channels for progression in ResNet backbone.")
-    parser.add_argument("--hidden3d_blocks", type=int, nargs="+", default=[1, 2, 1, 0, 0, 0], help="Number of hidden 3d blocks for ResNet backbone.")
-    parser.add_argument("--hidden_blocks", type=int, nargs="+", default=[1, 2, 6, 8, 23, 8], help="Number of hidden 2d blocks for ResNet backbone.")
-    parser.add_argument("--bottleneck_factor", type=int, default=4, help="The bottleneck factor of the ResNet backbone. Default 4.")
-    parser.add_argument("--squeeze_excitation", action="store_false", help="Whether to use squeeze and excitation. Default True.")
-    parser.add_argument("--use_3d_prediction", action="store_true", help="Whether or not to predict a 3D region. Default False.")
-    parser.add_argument("--positive_weight", type=float, default=3.0, help="The weight for positive samples. Default 3.0.")
-    parser.add_argument("--use_async_sampler", action="store_true", help="Whether or not to use an asynchronous sampler. Default False.")
-    parser.add_argument("--num_extra_steps", type=int, default=0, help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
+    parser.add_argument("--channel_progression", type=int, nargs="+", default=[2, 3, 6, 9, 15, 32, 128, 256, 512, 1024],
+                        help="The channels for progression in ResNet backbone.")
+    parser.add_argument("--hidden3d_blocks", type=int, nargs="+", default=[1, 2, 1, 0, 0, 0],
+                        help="Number of hidden 3d blocks for ResNet backbone.")
+    parser.add_argument("--hidden_blocks", type=int, nargs="+", default=[1, 2, 6, 8, 23, 8],
+                        help="Number of hidden 2d blocks for ResNet backbone.")
+    parser.add_argument("--bottleneck_factor", type=int, default=4,
+                        help="The bottleneck factor of the ResNet backbone. Default 4.")
+    parser.add_argument("--squeeze_excitation", action="store_false",
+                        help="Whether to use squeeze and excitation. Default True.")
+    parser.add_argument("--use_3d_prediction", action="store_true",
+                        help="Whether or not to predict a 3D region. Default False.")
+    parser.add_argument("--positive_weight", type=float, default=3.0,
+                        help="The weight for positive samples. Default 3.0.")
+    parser.add_argument("--use_async_sampler", action="store_true",
+                        help="Whether or not to use an asynchronous sampler. Default False.")
+    parser.add_argument("--num_extra_steps", type=int, default=0,
+                        help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
     manager_folds.add_argparse_arguments(parser)
     manager_models.add_argparse_arguments(parser)
     config.add_argparse_arguments(parser)
@@ -290,9 +333,27 @@ if __name__ == "__main__":
     print("Validation dataset: {}".format(val_dset_name))
 
     for patient_id in training_entries:
-        assert manager_segmentations.patient_has_expert_segmentations(patient_id) or manager_segmentations.patient_has_TSM_segmentations(patient_id), "Patient {} has no expert or TSM segmentations.".format(patient_id)
+        assert manager_segmentations.patient_has_expert_segmentations(
+            patient_id) or manager_segmentations.patient_has_TSM_segmentations(
+            patient_id), "Patient {} has no expert or TSM segmentations.".format(patient_id)
     for patient_id in validation_entries:
-        assert manager_segmentations.patient_has_expert_segmentations(patient_id) or manager_segmentations.patient_has_TSM_segmentations(patient_id), "Patient {} has no expert or TSM segmentations.".format(patient_id)
+        assert manager_segmentations.patient_has_expert_segmentations(
+            patient_id) or manager_segmentations.patient_has_TSM_segmentations(
+            patient_id), "Patient {} has no expert or TSM segmentations.".format(patient_id)
+    if args.num_extra_nonexpert_training > 0:
+        print("Using {} extra non-expert segmentations for training.".format(args.num_extra_nonexpert_training))
+        extra_entries = [int(x) for x in manager_segmentations.get_patients_with_TSM_segmentation()]
+        assert len(set(extra_entries).intersection(set([int(x) for x in validation_entries]))) == 0, \
+            "Some validation patients have TSM (non-expert) segmentations."
+        training_entries = training_shuffle_utils.BiasedShuffleInfo(shuffle_info=[get_representing_shuffle_entry(int(x)) for
+                                                                            x in training_entries],
+                                                 shuffle_info_extra=[get_representing_shuffle_entry(int(x)) for
+                                                                            x in extra_entries],
+                                                 extra_shuffle_samples=args.num_extra_nonexpert_training)
+    else:
+        print("Not using any extra segmentations.")
+        training_entries = training_shuffle_utils.ShuffleInfo(shuffle_info=[get_representing_shuffle_entry(int(x)) for
+                                                                            x in training_entries])
 
     # initialize gpu
     config.parse_args(args)
@@ -350,27 +411,28 @@ if __name__ == "__main__":
 
     # Create model and optimizer, and setup 3d or 2d
     backbone = model_3d_patch_resnet.ResNet3DBackbone(in_channels=1,
-                                            channel_progression=channel_progression,
-                                            res_conv3d_blocks=hidden3d_blocks,
-                                            res_conv_blocks=hidden_blocks,
-                                            bottleneck_factor=bottleneck_factor,
-                                            squeeze_excitation=squeeze_excitation,
-                                            return_3d_features=use_3d_prediction)
+                                                      channel_progression=channel_progression,
+                                                      res_conv3d_blocks=hidden3d_blocks,
+                                                      res_conv_blocks=hidden_blocks,
+                                                      bottleneck_factor=bottleneck_factor,
+                                                      squeeze_excitation=squeeze_excitation,
+                                                      return_3d_features=use_3d_prediction)
     if use_3d_prediction:
         deep_channels = backbone.get_deep3d_channels()
-        print("Using 3D prediction. Detected deep channels: " + str(deep_channels) + "   Last channel: " + str(channel_progression[-1]))
-        model = model_3d_patch_resnet.NeighborhoodROINet(backbone = backbone, first_channels=deep_channels[0],
+        print("Using 3D prediction. Detected deep channels: " + str(deep_channels) + "   Last channel: " + str(
+            channel_progression[-1]))
+        model = model_3d_patch_resnet.NeighborhoodROINet(backbone=backbone, first_channels=deep_channels[0],
                                                          mid_channels=deep_channels[1],
                                                          last_channels=channel_progression[-1],
                                                          feature_width=18, feature_height=16)
         tensor_2d3d = (0, 2, 3, 4)
-        bowel_mask_tensor = torch.tensor([1, 1, 1, 0], dtype=torch.float32, device=config.device)\
-                                .unsqueeze(0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        bowel_mask_tensor = torch.tensor([1, 1, 1, 0], dtype=torch.float32, device=config.device) \
+            .unsqueeze(0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
     else:
-        model = model_3d_patch_resnet.LocalizedROINet(backbone = backbone, num_channels=channel_progression[-1])
+        model = model_3d_patch_resnet.LocalizedROINet(backbone=backbone, num_channels=channel_progression[-1])
         tensor_2d3d = (0, 2, 3)
         bowel_mask_tensor = torch.tensor([1, 1, 1, 0], dtype=torch.float32, device=config.device) \
-                                .unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
+            .unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
     model = model.to(config.device)
 
     print("Learning rate: " + str(learning_rate))
@@ -384,7 +446,6 @@ if __name__ == "__main__":
     else:
         print("Invalid optimizer. The available options are: adam, sgd.")
         exit(1)
-
 
     # Load previous model checkpoint if available
     if prev_model_dir is not None:
@@ -407,6 +468,7 @@ if __name__ == "__main__":
         "learning_rate": learning_rate,
         "momentum": momentum,
         "second_momentum": second_momentum,
+        "num_extra_nonexpert_training": args.num_extra_nonexpert_training,
         "disable_random_slices": disable_random_slices,
         "disable_rotpos_augmentation": disable_rotpos_augmentation,
         "disable_elastic_augmentation": disable_elastic_augmentation,
@@ -481,8 +543,8 @@ if __name__ == "__main__":
             for k in range(num_extra_steps):
                 training_step(record=False)
                 torch.save(model.state_dict(), os.path.join(model_dir, "model_{}_substep{}.pt".format(epoch, k)))
-                torch.save(optimizer.state_dict(), os.path.join(model_dir, "optimizer_{}_substep{}.pt".format(epoch, k)))
-
+                torch.save(optimizer.state_dict(),
+                           os.path.join(model_dir, "optimizer_{}_substep{}.pt".format(epoch, k)))
 
             print("Running the usual step of gradient descent.")
             training_step(record=True)
@@ -504,7 +566,6 @@ if __name__ == "__main__":
             if epoch % epochs_per_save == 0:
                 torch.save(model.state_dict(), os.path.join(model_dir, "model_{}.pt".format(epoch)))
                 torch.save(optimizer.state_dict(), os.path.join(model_dir, "optimizer_{}.pt".format(epoch)))
-
 
         print("Training complete! Saving and finalizing...")
     except KeyboardInterrupt:

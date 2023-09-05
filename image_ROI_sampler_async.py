@@ -89,21 +89,8 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                     displacement_field = image_sampler_augmentations.generate_displacement_field(original_width,
                                                                                                  original_height)
                     displacement_field = torch.from_numpy(displacement_field)
-                    image_slice = torchvision.transforms.functional.elastic_transform(
-                        image_slice.unsqueeze(1), displacement_field,
-                        interpolation=torchvision.transforms.InterpolationMode.NEAREST).squeeze(1)
-                    if not use_3d:
-                        segmentation_slice = torchvision.transforms.functional.elastic_transform(
-                            segmentation_slice.unsqueeze(1), displacement_field,
-                            interpolation=torchvision.transforms.InterpolationMode.NEAREST).squeeze(1)
-                    else:
-                        assert segmentation_slice.shape[0] == 4 and segmentation_slice.shape[1] == len(slice_locs)
-                        segmentation_slice = torchvision.transforms.functional.elastic_transform(
-                            segmentation_slice.reshape(4 * len(slice_locs), 1, original_height, original_width),
-                            displacement_field,
-                            interpolation=torchvision.transforms.InterpolationMode.NEAREST).view(4, len(slice_locs),
-                                                                                                 original_height,
-                                                                                                 original_width)
+                    image_slice = image_sampler_augmentations.apply_displacement_field(image_slice, displacement_field)
+                    segmentation_slice = image_sampler_augmentations.apply_displacement_field(segmentation_slice, displacement_field)
 
                 buffered_images.append({"image": image_slice, "segmentation": segmentation_slice})
 
@@ -309,6 +296,12 @@ def load_image(patient_id: str,
             image[k, 0, ...].copy_(torch.from_numpy(image_slice))
             segmentations[k, ...].copy_(torch.from_numpy(segmentation_slice))
             worker_used += 1
+
+        # flip along the depth dimension if slope > 0
+        if slope > 0:
+            image = image.flip(2)
+            if segmentation_region_depth > 1:
+                segmentations = segmentations.flip(2)
 
         # reshape the depth dimension if contracted
         if contracted:

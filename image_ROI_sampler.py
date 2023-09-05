@@ -125,21 +125,17 @@ def load_image(patient_id: str,
             if elastic_augmentation:
                 displacement_field = image_sampler_augmentations.generate_displacement_field(original_width, original_height)
                 displacement_field = torch.from_numpy(displacement_field)
-                image_slice = torchvision.transforms.functional.elastic_transform(
-                    image_slice.unsqueeze(1), displacement_field,
-                    interpolation=torchvision.transforms.InterpolationMode.NEAREST).squeeze(1)
-                if segmentation_region_depth == 1:
-                    segmentation_slice = torchvision.transforms.functional.elastic_transform(
-                        segmentation_slice.unsqueeze(1), displacement_field,
-                        interpolation=torchvision.transforms.InterpolationMode.NEAREST).squeeze(1)
-                else:
-                    assert segmentation_slice.shape[0] == 4 and segmentation_slice.shape[1] == loaded_temp_depth
-                    segmentation_slice = torchvision.transforms.functional.elastic_transform(
-                        segmentation_slice.reshape(4 * loaded_temp_depth, 1, original_height, original_width), displacement_field,
-                        interpolation=torchvision.transforms.InterpolationMode.NEAREST).view(4, loaded_temp_depth, original_height, original_width)
+                image_slice = image_sampler_augmentations.apply_displacement_field(image_slice, displacement_field)
+                segmentation_slice = image_sampler_augmentations.apply_displacement_field(segmentation_slice, displacement_field)
 
             image[k, 0, ...].copy_(image_slice, non_blocking=True)
             segmentations[k, ...].copy_(segmentation_slice, non_blocking=True)
+
+        # flip along the depth dimension if slope > 0
+        if slope > 0:
+            image = image.flip(2)
+            if segmentation_region_depth > 1:
+                segmentations = segmentations.flip(2)
 
         # reshape the depth dimension if contracted
         if contracted:
