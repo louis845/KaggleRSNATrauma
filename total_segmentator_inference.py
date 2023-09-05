@@ -100,7 +100,7 @@ if __name__ == "__main__":
 
             if (partition is None) or (count % stride == partition): # process only in the partition
                 if (not os.path.isfile(os.path.join("data", "segmentations", series_id + ".nii")))\
-                    and (os.path.isfile(outfile)): # skip the file if it is already processed
+                    and (not os.path.isfile(outfile)): # skip the file if it is already processed
                     if shape_info.loc[int(series_id)]["mean_slope"] < 0:
                         save_segmentation(series_folder, outfile, convert_labels=False)
                     else:
