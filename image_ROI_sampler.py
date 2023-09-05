@@ -34,8 +34,8 @@ def load_image(patient_id: str,
                slices_random=False,
                translate_rotate_augmentation=False,
                elastic_augmentation=False) -> (torch.Tensor, torch.Tensor):
-    assert slice_region_depth % 2 == 1, "slice_region_width must be odd"
-    assert segmentation_region_depth % 2 == 1, "segmentation_region_width must be odd"
+    assert slice_region_depth % 2 == 1, "slice_region_depth must be odd"
+    assert segmentation_region_depth % 2 == 1, "segmentation_region_depth must be odd"
     assert segmentation_region_depth <= slice_region_depth, "segmentation_region_width must be less than or equal to slice_region_width"
     slice_region_radius = (slice_region_depth - 1) // 2
 
@@ -123,10 +123,24 @@ def load_image(patient_id: str,
 
             # apply elastic deformation to height width
             if elastic_augmentation:
-                displacement_field = image_sampler_augmentations.generate_displacement_field(original_width, original_height)
-                displacement_field = torch.from_numpy(displacement_field)
-                image_slice = image_sampler_augmentations.apply_displacement_field(image_slice, displacement_field)
-                segmentation_slice = image_sampler_augmentations.apply_displacement_field(segmentation_slice, displacement_field)
+                if contracted:
+                    # 2d elastic deformation, uniform over depth
+                    displacement_field = image_sampler_augmentations.generate_displacement_field(original_width, original_height)
+                    displacement_field = torch.from_numpy(displacement_field)
+                    image_slice = image_sampler_augmentations.apply_displacement_field(image_slice, displacement_field)
+                    segmentation_slice = image_sampler_augmentations.apply_displacement_field(segmentation_slice, displacement_field)
+                else:
+                    # 3d elastic deformation (varying 2d elastic deformation over depth)
+                    displacement_field = image_sampler_augmentations.generate_displacement_field3D(original_width, original_height, slice_region_depth,
+                                                                                                   [0.3, 0.7, 1, 0.7, 0.3])
+                    displacement_field = torch.from_numpy(displacement_field)
+                    image_slice = image_sampler_augmentations.apply_displacement_field3D(image_slice, displacement_field)
+                    if segmentation_region_depth > 1:
+                        segmentation_slice = image_sampler_augmentations.apply_displacement_field3D(segmentation_slice,
+                                                                                                    displacement_field)
+                    else: # apply deformation in center slice only
+                        segmentation_slice = image_sampler_augmentations.apply_displacement_field(segmentation_slice,
+                                                        displacement_field[slice_region_radius, ...].unsqueeze(0))
 
             image[k, 0, ...].copy_(image_slice, non_blocking=True)
             segmentations[k, ...].copy_(segmentation_slice, non_blocking=True)

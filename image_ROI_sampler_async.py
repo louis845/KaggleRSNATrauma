@@ -54,6 +54,7 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 slice_locs = np.array(load_info["slices"])
                 slice_center = load_info["slice_center"]
                 elastic_augmentation = load_info["elastic_augmentation"]
+                contracted = load_info["contracted"]
 
                 # load image and apply augmentation if needed
                 with h5py.File(os.path.join("data_hdf5_cropped", str(patient_id), str(series_id), "ct_3D_image.hdf5"), "r") as f:
@@ -86,11 +87,24 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
 
                 # apply elastic deformation to height width
                 if elastic_augmentation:
-                    displacement_field = image_sampler_augmentations.generate_displacement_field(original_width,
-                                                                                                 original_height)
-                    displacement_field = torch.from_numpy(displacement_field)
-                    image_slice = image_sampler_augmentations.apply_displacement_field(image_slice, displacement_field)
-                    segmentation_slice = image_sampler_augmentations.apply_displacement_field(segmentation_slice, displacement_field)
+                    if contracted:
+                        # 2d elastic deformation, uniform over depth
+                        displacement_field = image_sampler_augmentations.generate_displacement_field(original_width, original_height)
+                        displacement_field = torch.from_numpy(displacement_field)
+                        image_slice = image_sampler_augmentations.apply_displacement_field(image_slice, displacement_field)
+                        segmentation_slice = image_sampler_augmentations.apply_displacement_field(segmentation_slice, displacement_field)
+                    else:
+                        # 3d elastic deformation (varying 2d elastic deformation over depth)
+                        displacement_field = image_sampler_augmentations.generate_displacement_field3D(original_width, original_height,
+                                                                                            slice_region_depth, [0.3, 0.7, 1, 0.7, 0.3])
+                        displacement_field = torch.from_numpy(displacement_field)
+                        image_slice = image_sampler_augmentations.apply_displacement_field3D(image_slice, displacement_field)
+                        if use_3d:
+                            segmentation_slice = image_sampler_augmentations.apply_displacement_field3D(segmentation_slice, displacement_field)
+                        else:  # apply deformation in center slice only
+                            segmentation_slice = image_sampler_augmentations.apply_displacement_field(
+                                segmentation_slice,
+                                displacement_field[(displacement_field.shape[0] - 1) // 2, ...].unsqueeze(0))
 
                 buffered_images.append({"image": image_slice, "segmentation": segmentation_slice})
 
@@ -176,14 +190,15 @@ class SliceLoaderWorker:
         self.seg_shared_memory.close()
         self.seg_shared_memory.unlink()
 
-    def request_load_image(self, patient_id, series_id, segmentation_folder: str, slices: list[int], slice_center: int, elastic_augmentation: bool):
+    def request_load_image(self, patient_id, series_id, segmentation_folder: str, slices: list[int], slice_center: int, elastic_augmentation: bool, contracted: bool):
         self.image_loading_pipe_send.send({
             "patient_id": patient_id,
             "series_id": series_id,
             "segmentation_folder": segmentation_folder,
             "slices": slices,
             "slice_center": slice_center,
-            "elastic_augmentation": elastic_augmentation
+            "elastic_augmentation": elastic_augmentation,
+            "contracted": contracted
         })
 
     def get_requested_image(self):

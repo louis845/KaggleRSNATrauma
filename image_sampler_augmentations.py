@@ -67,14 +67,21 @@ def apply_displacement_field(image: torch.Tensor, displacement_field: torch.Tens
                 displacement_field, interpolation=torchvision.transforms.InterpolationMode.NEAREST)
     return image.view(img_shape)
 
-def apply_random_shear3D(displacement_field, xory, image_width, image_height, magnitude_low, magnitude_high):
+def apply_random_shear3D(displacement_field, xory, image_depth, image_width, image_height,
+                         kernel_depth_span, magnitude_low, magnitude_high):
     x_low = image_width // 3
     x_high = image_width * 2 // 3
     y_low = image_height // 3
     y_high = image_height * 2 // 3
 
+    depth_radius = (image_depth - 1) // 2
+    span_radius = (len(kernel_depth_span) - 1) // 2
+    d_low = depth_radius - span_radius
+    d_high = depth_radius + span_radius
+
     x = np.random.randint(low=x_low, high=x_high + 1)
     y = np.random.randint(low=y_low, high=y_high + 1)
+    d = np.random.randint(low=d_low, high=d_high + 1)
     sigma = np.random.uniform(low=100.0, high=200.0)
     magnitude = np.random.uniform(low=magnitude_low, high=magnitude_high) * np.random.choice([-1, 1])
 
@@ -89,14 +96,21 @@ def apply_random_shear3D(displacement_field, xory, image_width, image_height, ma
     expand_bottom = min(kernel_height + 1, image_height - y)
 
     if xory == "x":
-        displacement_field[0, y - expand_top:y + expand_bottom, x - expand_left:x + expand_right, 0:1] += \
-            kernel[kernel_height - expand_top:kernel_height + expand_bottom, kernel_width - expand_left:kernel_width + expand_right, :]
+        displacement_field[d - span_radius:d + span_radius + 1, y - expand_top:y + expand_bottom, x - expand_left:x + expand_right, 0:1] += \
+            (kernel[kernel_height - expand_top:kernel_height + expand_bottom, kernel_width - expand_left:kernel_width + expand_right, :]
+                * np.expand_dims(kernel_depth_span, axis=(1, 2, 3)))
     else:
-        displacement_field[0, y - expand_top:y + expand_bottom, x - expand_left:x + expand_right, 1:2] += \
-            kernel[kernel_height - expand_top:kernel_height + expand_bottom, kernel_width - expand_left:kernel_width + expand_right, :]
+        displacement_field[d - span_radius:d + span_radius + 1, y - expand_top:y + expand_bottom, x - expand_left:x + expand_right, 1:2] += \
+            (kernel[kernel_height - expand_top:kernel_height + expand_bottom, kernel_width - expand_left:kernel_width + expand_right, :]
+                * np.expand_dims(kernel_depth_span, axis=(1, 2, 3)))
 
-def generate_displacement_field3D(image_width, image_height, image_depth, kernel_depth_span, num_kernels=7) -> np.ndarray:
+def generate_displacement_field3D(image_width, image_height, image_depth, kernel_depth_span: list[float], num_kernels=7) -> np.ndarray:
+    assert len(kernel_depth_span) <= image_depth, "The kernel depth span must be smaller than the image depth."
+    assert image_depth % 2 == 1, "The image depth must be odd."
+    assert len(kernel_depth_span) % 2 == 1, "The kernel depth span must be odd."
+
     displacement_field = np.zeros(shape=(image_depth, image_height, image_width, 2), dtype=np.float32)
+    kernel_depth_span = np.array(kernel_depth_span, dtype=np.float32)
 
     type = np.random.choice(3)
     if type == 0:
@@ -110,10 +124,31 @@ def generate_displacement_field3D(image_width, image_height, image_depth, kernel
         magnitude_high = 7000.0
 
     for k in range(num_kernels):
-        apply_random_shear3D(displacement_field, xory="x", image_width=image_width, image_height=image_height, magnitude_low=magnitude_low, magnitude_high=magnitude_high)
-        apply_random_shear3D(displacement_field, xory="y", image_width=image_width, image_height=image_height, magnitude_low=magnitude_low, magnitude_high=magnitude_high)
+        apply_random_shear3D(displacement_field, xory="x", image_depth=image_depth, image_width=image_width, image_height=image_height,
+                             kernel_depth_span=kernel_depth_span, magnitude_low=magnitude_low, magnitude_high=magnitude_high)
+        apply_random_shear3D(displacement_field, xory="y", image_depth=image_depth, image_width=image_width, image_height=image_height,
+                             kernel_depth_span=kernel_depth_span, magnitude_low=magnitude_low, magnitude_high=magnitude_high)
 
     return displacement_field
+
+def apply_displacement_field3D(image: torch.Tensor, displacement_field: torch.Tensor):
+    """
+    Apply a displacement field to an image.
+    :param image: The image to apply the displacement field to. The image should have shape (..., D, H, W)
+    :param displacement_field: The displacement field to apply. The displacement field should have shape (D, H, W, 2)
+    :return: The image with the displacement field applied.
+    """
+    assert image.shape[-2] == displacement_field.shape[1], "The image and displacement field must have the same height."
+    assert image.shape[-1] == displacement_field.shape[2], "The image and displacement field must have the same width."
+    assert image.shape[-3] == displacement_field.shape[0], "The image and displacement field must have the same depth."
+
+    for d in image.shape[-3]:
+        slice = image[..., d, :, :]
+        slice_shape = slice.shape
+        image[..., d, :, :].copy_(torchvision.transforms.functional.elastic_transform(slice.view(-1, 1, slice_shape[-2], slice_shape[-1]),
+                displacement_field[d, ...].unsqueeze(0), interpolation=torchvision.transforms.InterpolationMode.NEAREST).view(slice_shape), non_blocking=True)
+    return image
+
 
 if __name__ == "__main__":
     from PySide2.QtWidgets import QApplication, QMainWindow, QFrame, QSlider, QLabel, \
