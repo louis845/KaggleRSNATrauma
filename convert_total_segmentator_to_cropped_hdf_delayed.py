@@ -1,10 +1,19 @@
 import time
 import os
+import argparse
 
 import convert_total_segmentator_to_cropped_hdf
 import pandas as pd
 
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Crops the results from Total Segmentator.")
+    parser.add_argument("--stride", type=int, default=1, help="Stride")
+    parser.add_argument("--partition", type=int, default=0, help="Partition")
+    args = parser.parse_args()
+    stride = args.stride
+    partition = args.partition
+
     patient_injuries = pd.read_csv("data/train.csv", index_col=0)
     patients_with_injuries = list(patient_injuries.loc[patient_injuries["any_injury"] == 1].index)
 
@@ -29,4 +38,4 @@ if __name__ == "__main__":
 
     time.sleep(100)
     
-    convert_total_segmentator_to_cropped_hdf.main_func()
+    convert_total_segmentator_to_cropped_hdf.main_func(stride, partition)

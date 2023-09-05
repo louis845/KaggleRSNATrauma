@@ -17,18 +17,23 @@ ct_folder = os.path.join("data", "train_images")
 seg_folder = "total_segmentator_results"
 cropped_segmentation_folder = "total_segmentator_hdf_cropped"
 
-def main_func():
+def main_func(stride=1, partition=0):
     patient_id_table = pd.read_csv("data/train_series_meta.csv", index_col=1)
 
     if not os.path.isdir(cropped_segmentation_folder):
         os.mkdir(cropped_segmentation_folder)
 
+    count = -1
     for series_file in tqdm.tqdm(os.listdir(seg_folder)):
+        count += 1
+
         series_id = series_file[:-5]
         file_path = os.path.join(seg_folder, series_file)
 
         output_file = os.path.join(cropped_segmentation_folder, series_id + ".hdf5")
         if os.path.isfile(output_file):  # if already processed, skip
+            continue
+        if (count % stride) != partition:
             continue
         # laod segmentation
         with h5py.File(file_path, "r") as f:
