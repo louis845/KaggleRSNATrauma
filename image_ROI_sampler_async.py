@@ -85,7 +85,7 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 else:
                     segmentation_slice = torch.tensor(segmentation_slice, dtype=torch.float32).permute((3, 0, 1, 2))
 
-                # apply elastic deformation to height width
+                # apply elastic deformation to height width. this is False always, but code is kept here for backwards compatibility with CPU version
                 if elastic_augmentation:
                     if contracted:
                         # 2d elastic deformation, uniform over depth
@@ -116,8 +116,8 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 # place data into shared memory
                 image_data = buffered_images.pop(0)
                 img_d, img_h, img_w = image_data["image"].shape
-                image_shared_memory_array[:img_d, :img_h, :img_w] = image_data["image"]
-                seg_shared_memory_array[:, :img_d, :img_h, :img_w] = image_data["segmentation"]
+                image_shared_memory_array[:img_d, :img_h, :img_w] = image_data["image"].numpy()
+                seg_shared_memory_array[:, :img_d, :img_h, :img_w] = image_data["segmentation"].numpy()
 
                 # set value to pass to main process
                 loaded_image_depth.value = img_d
@@ -281,11 +281,11 @@ def load_image(patient_id: str,
         slice_poses = np.clip(slice_poses, -slice_span[0], total_slices - 1 - slice_span[-1])
 
         # sample the images and the segmentation now
-        image = torch.zeros((slices, 1, loaded_temp_depth, original_height, original_width), dtype=torch.float32)
+        image = torch.zeros((slices, 1, loaded_temp_depth, original_height, original_width), dtype=torch.float32, device=config.device)
         if segmentation_region_depth == 1:
-            segmentations = torch.zeros((slices, 4, original_height, original_width), dtype=torch.float32)
+            segmentations = torch.zeros((slices, 4, original_height, original_width), dtype=torch.float32, device=config.device)
         else:
-            segmentations = torch.zeros((slices, 4, loaded_temp_depth, original_height, original_width), dtype=torch.float32)
+            segmentations = torch.zeros((slices, 4, loaded_temp_depth, original_height, original_width), dtype=torch.float32, device=config.device)
 
         worker_used = 0
         for k in range(slices):
@@ -302,16 +302,46 @@ def load_image(patient_id: str,
                     cur_slice_depths = np.clip(cur_slice_depths, min_slice, max_slice)
                     cur_slice_depths[slice_region_radius] = slice_pos # make sure the center is the same
 
-            loader_workers[worker_used % num_loader_workers].request_load_image(patient_id, series_id, segmentation_folder, list(cur_slice_depths), slice_pos, elastic_augmentation=elastic_augmentation,
+            loader_workers[worker_used % num_loader_workers].request_load_image(patient_id, series_id, segmentation_folder, list(cur_slice_depths), slice_pos, elastic_augmentation=False,
                                                                                 contracted=contracted)
             worker_used += 1
 
         worker_used = 0
         for k in range(slices):
             image_slice, segmentation_slice = loader_workers[worker_used % num_loader_workers].get_requested_image()
-            image[k, 0, ...].copy_(torch.from_numpy(image_slice))
-            segmentations[k, ...].copy_(torch.from_numpy(segmentation_slice))
+            image[k, 0, ...].copy_(torch.from_numpy(image_slice), non_blocking=True)
+            segmentations[k, ...].copy_(torch.from_numpy(segmentation_slice), non_blocking=True)
             worker_used += 1
+
+        # apply elastic deformation to height width
+        if elastic_augmentation:
+            if contracted:
+                # 2d elastic deformation, uniform over depth, but different over slices
+                displacement_field = torch.tensor(np.concatenate([image_sampler_augmentations.generate_displacement_field(original_width, original_height)
+                                        for k in range(slices)], axis=0), dtype=torch.float32, device=config.device)
+                image = image_sampler_augmentations.apply_displacement_field3D_simple(image.reshape(slices, loaded_temp_depth, original_height, original_width),
+                                                                                 displacement_field).view(slices, 1, loaded_temp_depth, original_height, original_width)
+                if segmentation_region_depth > 1:
+                    segmentations = segmentations.reshape(slices, 4 * loaded_temp_depth, original_height, original_width)
+                segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations, displacement_field)
+                if segmentation_region_depth > 1:
+                    segmentations = segmentations.view(slices, 4, loaded_temp_depth, original_height, original_width)
+            else:
+                # 3d elastic deformation (varying 2d elastic deformation over depth), and also varying over slices
+                displacement_field = torch.stack([image_sampler_augmentations.generate_displacement_field3D(original_width, original_height, loaded_temp_depth, # (slices, loaded_temp_depth, H, W, 2)
+                                                                                                kernel_depth_span=[0.3, 0.7, 1, 0.7, 0.3], device=config.device) for k in range(slices)], dim=0)
+                assert displacement_field.shape == (slices, loaded_temp_depth, original_height, original_width, 2)
+                image = image_sampler_augmentations.apply_displacement_field3D_simple(image.reshape(slices * loaded_temp_depth, 1, original_height, original_width),
+                                                                                      displacement_field.view(slices * loaded_temp_depth, original_height, original_width, 2))\
+                                .view(slices, 1, loaded_temp_depth, original_height, original_width)
+
+                if segmentation_region_depth > 1:
+                    segmentations = segmentations.permute(0, 2, 1, 3, 4).reshape(slices * loaded_temp_depth, 4, original_height, original_width)
+                    segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations,
+                                                                                    displacement_field.view(slices * loaded_temp_depth, original_height, original_width, 2))
+                    segmentations = segmentations.view(slices, loaded_temp_depth, 4, original_height, original_width).permute(0, 2, 1, 3, 4)
+                else: # apply deformation in center slice only
+                    segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations, displacement_field[:, slice_region_radius, ...])
 
         # flip along the depth dimension if slope > 0
         if slope > 0:
@@ -374,4 +404,4 @@ def load_image(patient_id: str,
         else:
             segmentations = torch.nn.functional.max_pool2d(segmentations.view(slices, 4 * segmentation_region_depth, 512, 576),
                                                 kernel_size=32, stride=32).view(slices, 4, segmentation_region_depth, 16, 18)
-    return image.to(device=config.device), segmentations.to(device=config.device)
+    return image, segmentations
