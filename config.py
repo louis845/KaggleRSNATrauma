@@ -17,6 +17,7 @@ def parse_args(args: argparse.Namespace):
     if args.memory_limit is not None:
         assert args.memory_limit > 0 and args.memory_limit <= 1, "Memory limit must be between 0 and 1"
         torch.cuda.set_per_process_memory_fraction(args.memory_limit, device=device)
+        print("Limiting GPU memory ratio: {}".format(args.memory_limit))
     else:
         print("Not limiting GPU memory.")
 
