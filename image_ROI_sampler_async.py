@@ -16,6 +16,7 @@ import image_sampler_augmentations
 def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.Value,
                              max_slice_region_depth: int, max_image_width: int, max_image_height: int,
                              loaded_image_depth: multiprocessing.Value, loaded_image_width: multiprocessing.Value, loaded_image_height: multiprocessing.Value,
+                             loaded_image_has_segmentations: multiprocessing.Value,
                              use_3d: bool,
                              image_available_lock: multiprocessing.Lock,
                              image_required_flag: multiprocessing.Value,
@@ -55,6 +56,7 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 slice_center = load_info["slice_center"]
                 elastic_augmentation = load_info["elastic_augmentation"]
                 contracted = load_info["contracted"]
+                load_segmentations = load_info["load_segmentations"]
 
                 # load image and apply augmentation if needed
                 with h5py.File(os.path.join("data_hdf5_cropped", str(patient_id), str(series_id), "ct_3D_image.hdf5"), "r") as f:
@@ -64,26 +66,29 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 original_height = image_slice.shape[1]
                 original_width = image_slice.shape[2]
 
-                with h5py.File(os.path.join(segmentation_folder, str(series_id) + ".hdf5"), "r") as f:
-                    segmentation_3D_image = f["segmentation_arr"]
-                    if not use_3d:
-                        segmentation_raw = segmentation_3D_image[slice_center, ...].astype(dtype=bool)
-                        segmentation_slice = np.zeros((original_height, original_width, 4), dtype=bool)
-                        segmentation_slice[..., :2] = segmentation_raw[..., :2]
-                        segmentation_slice[..., 2] = np.any(segmentation_raw[..., 2:4], axis=-1)
-                        segmentation_slice[..., 3] = segmentation_raw[..., 4]
-                    else:
-                        segmentation_raw = segmentation_3D_image[slice_locs, ...].astype(dtype=bool)
-                        segmentation_slice = np.zeros((len(slice_locs), original_height, original_width, 4),
-                                                      dtype=bool)
-                        segmentation_slice[..., :2] = segmentation_raw[..., :2]
-                        segmentation_slice[..., 2] = np.any(segmentation_raw[..., 2:4], axis=-1)
-                        segmentation_slice[..., 3] = segmentation_raw[..., 4]
-                    del segmentation_raw
-                if not use_3d:
-                    segmentation_slice = torch.tensor(segmentation_slice, dtype=torch.float32).permute((2, 0, 1))
+                if not load_segmentations:
+                    segmentation_slice = None
                 else:
-                    segmentation_slice = torch.tensor(segmentation_slice, dtype=torch.float32).permute((3, 0, 1, 2))
+                    with h5py.File(os.path.join(segmentation_folder, str(series_id) + ".hdf5"), "r") as f:
+                        segmentation_3D_image = f["segmentation_arr"]
+                        if not use_3d:
+                            segmentation_raw = segmentation_3D_image[slice_center, ...].astype(dtype=bool)
+                            segmentation_slice = np.zeros((original_height, original_width, 4), dtype=bool)
+                            segmentation_slice[..., :2] = segmentation_raw[..., :2]
+                            segmentation_slice[..., 2] = np.any(segmentation_raw[..., 2:4], axis=-1)
+                            segmentation_slice[..., 3] = segmentation_raw[..., 4]
+                        else:
+                            segmentation_raw = segmentation_3D_image[slice_locs, ...].astype(dtype=bool)
+                            segmentation_slice = np.zeros((len(slice_locs), original_height, original_width, 4),
+                                                          dtype=bool)
+                            segmentation_slice[..., :2] = segmentation_raw[..., :2]
+                            segmentation_slice[..., 2] = np.any(segmentation_raw[..., 2:4], axis=-1)
+                            segmentation_slice[..., 3] = segmentation_raw[..., 4]
+                        del segmentation_raw
+                    if not use_3d:
+                        segmentation_slice = torch.tensor(segmentation_slice, dtype=torch.float32).permute((2, 0, 1))
+                    else:
+                        segmentation_slice = torch.tensor(segmentation_slice, dtype=torch.float32).permute((3, 0, 1, 2))
 
                 # apply elastic deformation to height width. this is False always, but code is kept here for backwards compatibility with CPU version
                 if elastic_augmentation:
@@ -92,19 +97,21 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                         displacement_field = image_sampler_augmentations.generate_displacement_field(original_width, original_height)
                         displacement_field = torch.from_numpy(displacement_field)
                         image_slice = image_sampler_augmentations.apply_displacement_field(image_slice, displacement_field)
-                        segmentation_slice = image_sampler_augmentations.apply_displacement_field(segmentation_slice, displacement_field)
+                        if load_segmentations:
+                            segmentation_slice = image_sampler_augmentations.apply_displacement_field(segmentation_slice, displacement_field)
                     else:
                         # 3d elastic deformation (varying 2d elastic deformation over depth)
                         displacement_field = image_sampler_augmentations.generate_displacement_field3D(original_width, original_height,
                                                                                             max_slice_region_depth, [0.3, 0.7, 1, 0.7, 0.3])
                         displacement_field = torch.from_numpy(displacement_field)
                         image_slice = image_sampler_augmentations.apply_displacement_field3D(image_slice, displacement_field)
-                        if use_3d:
-                            segmentation_slice = image_sampler_augmentations.apply_displacement_field3D(segmentation_slice, displacement_field)
-                        else:  # apply deformation in center slice only
-                            segmentation_slice = image_sampler_augmentations.apply_displacement_field(
-                                segmentation_slice,
-                                displacement_field[(displacement_field.shape[0] - 1) // 2, ...].unsqueeze(0))
+                        if load_segmentations:
+                            if use_3d:
+                                segmentation_slice = image_sampler_augmentations.apply_displacement_field3D(segmentation_slice, displacement_field)
+                            else:  # apply deformation in center slice only
+                                segmentation_slice = image_sampler_augmentations.apply_displacement_field(
+                                    segmentation_slice,
+                                    displacement_field[(displacement_field.shape[0] - 1) // 2, ...].unsqueeze(0))
 
                 buffered_images.append({"image": image_slice, "segmentation": segmentation_slice})
 
@@ -123,6 +130,7 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 loaded_image_depth.value = img_d
                 loaded_image_height.value = img_h
                 loaded_image_width.value = img_w
+                loaded_image_has_segmentations.value = (image_data["segmentation"] is not None)
 
                 # release lock
                 image_available_lock.release()
@@ -173,10 +181,12 @@ class SliceLoaderWorker:
         self.loaded_image_depth = multiprocessing.Value(ctypes.c_int, 0)
         self.loaded_image_width = multiprocessing.Value(ctypes.c_int, 0)
         self.loaded_image_height = multiprocessing.Value(ctypes.c_int, 0)
+        self.loaded_image_has_segmentations = multiprocessing.Value(ctypes.c_bool, False)
 
         self.process = multiprocessing.Process(target=image_loading_subprocess, args=(image_loading_pipe_recv, self.running,
                                                                                         max_slice_region_depth, max_image_width, max_image_height,
                                                                                         self.loaded_image_depth, self.loaded_image_width, self.loaded_image_height,
+                                                                                        self.loaded_image_has_segmentations,
                                                                                         use_3d,
                                                                                         self.image_available_lock,
                                                                                         self.image_required_flag, worker_name, 5))
@@ -190,7 +200,7 @@ class SliceLoaderWorker:
         self.seg_shared_memory.close()
         self.seg_shared_memory.unlink()
 
-    def request_load_image(self, patient_id, series_id, segmentation_folder: str, slices: list[int], slice_center: int, elastic_augmentation: bool, contracted: bool):
+    def request_load_image(self, patient_id, series_id, segmentation_folder: str, slices: list[int], slice_center: int, elastic_augmentation: bool, contracted: bool, load_segmentations: bool):
         self.image_loading_pipe_send.send({
             "patient_id": patient_id,
             "series_id": series_id,
@@ -198,15 +208,20 @@ class SliceLoaderWorker:
             "slices": slices,
             "slice_center": slice_center,
             "elastic_augmentation": elastic_augmentation,
-            "contracted": contracted
+            "contracted": contracted,
+            "load_segmentations": load_segmentations
         })
 
     def get_requested_image(self):
         self.image_required_flag.value = True
         self.image_available_lock.acquire(block=True)
 
-        return self.image_shared_memory_array[:self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width.value].copy(),\
-                self.seg_shared_memory_array[:, :self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width.value].copy()
+        if self.loaded_image_has_segmentations.value:
+            return self.image_shared_memory_array[:self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width.value].copy(),\
+                    self.seg_shared_memory_array[:, :self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width.value].copy()
+        else:
+            return self.image_shared_memory_array[:self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width.value].copy(), \
+                     None
 
 
 slice_region_depth: int = None
@@ -238,6 +253,8 @@ def load_image(patient_id: str,
                slices_random=False,
                translate_rotate_augmentation=False,
                elastic_augmentation=False) -> (torch.Tensor, torch.Tensor):
+    if segmentation_folder is None:
+        segmentation_region_depth = -1
     global slice_region_depth, loader_workers, num_loader_workers
     assert segmentation_region_depth % 2 == 1, "segmentation_region_width must be odd"
     assert segmentation_region_depth <= slice_region_depth, "segmentation_region_width must be less than or equal to slice_region_width"
@@ -282,7 +299,9 @@ def load_image(patient_id: str,
 
         # sample the images and the segmentation now
         image = torch.zeros((slices, 1, loaded_temp_depth, original_height, original_width), dtype=torch.float32, device=config.device)
-        if segmentation_region_depth == 1:
+        if segmentation_region_depth == -1:
+            segmentations = None
+        elif segmentation_region_depth == 1:
             segmentations = torch.zeros((slices, 4, original_height, original_width), dtype=torch.float32, device=config.device)
         else:
             segmentations = torch.zeros((slices, 4, loaded_temp_depth, original_height, original_width), dtype=torch.float32, device=config.device)
@@ -303,14 +322,15 @@ def load_image(patient_id: str,
                     cur_slice_depths[slice_region_radius] = slice_pos # make sure the center is the same
 
             loader_workers[worker_used % num_loader_workers].request_load_image(patient_id, series_id, segmentation_folder, list(cur_slice_depths), slice_pos, elastic_augmentation=False,
-                                                                                contracted=contracted)
+                                                                                contracted=contracted, load_segmentations=segmentation_region_depth != -1)
             worker_used += 1
 
         worker_used = 0
         for k in range(slices):
             image_slice, segmentation_slice = loader_workers[worker_used % num_loader_workers].get_requested_image()
             image[k, 0, ...].copy_(torch.from_numpy(image_slice), non_blocking=True)
-            segmentations[k, ...].copy_(torch.from_numpy(segmentation_slice), non_blocking=True)
+            if segmentation_region_depth != -1:
+                segmentations[k, ...].copy_(torch.from_numpy(segmentation_slice), non_blocking=True)
             worker_used += 1
 
         # apply elastic deformation to height width
@@ -321,11 +341,12 @@ def load_image(patient_id: str,
                                         for k in range(slices)], axis=0), dtype=torch.float32, device=config.device)
                 image = image_sampler_augmentations.apply_displacement_field3D_simple(image.reshape(slices, loaded_temp_depth, original_height, original_width),
                                                                                  displacement_field).view(slices, 1, loaded_temp_depth, original_height, original_width)
-                if segmentation_region_depth > 1:
-                    segmentations = segmentations.reshape(slices, 4 * loaded_temp_depth, original_height, original_width)
-                segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations, displacement_field)
-                if segmentation_region_depth > 1:
-                    segmentations = segmentations.view(slices, 4, loaded_temp_depth, original_height, original_width)
+                if segmentation_region_depth != -1:
+                    if segmentation_region_depth > 1:
+                        segmentations = segmentations.reshape(slices, 4 * loaded_temp_depth, original_height, original_width)
+                    segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations, displacement_field)
+                    if segmentation_region_depth > 1:
+                        segmentations = segmentations.view(slices, 4, loaded_temp_depth, original_height, original_width)
             else:
                 # 3d elastic deformation (varying 2d elastic deformation over depth), and also varying over slices
                 displacement_field = torch.stack([image_sampler_augmentations.generate_displacement_field3D(original_width, original_height, loaded_temp_depth, # (slices, loaded_temp_depth, H, W, 2)
@@ -335,13 +356,14 @@ def load_image(patient_id: str,
                                                                                       displacement_field.view(slices * loaded_temp_depth, original_height, original_width, 2))\
                                 .view(slices, 1, loaded_temp_depth, original_height, original_width)
 
-                if segmentation_region_depth > 1:
-                    segmentations = segmentations.permute(0, 2, 1, 3, 4).reshape(slices * loaded_temp_depth, 4, original_height, original_width)
-                    segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations,
-                                                                                    displacement_field.view(slices * loaded_temp_depth, original_height, original_width, 2))
-                    segmentations = segmentations.view(slices, loaded_temp_depth, 4, original_height, original_width).permute(0, 2, 1, 3, 4)
-                else: # apply deformation in center slice only
-                    segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations, displacement_field[:, slice_region_radius, ...])
+                if segmentation_region_depth != -1:
+                    if segmentation_region_depth > 1:
+                        segmentations = segmentations.permute(0, 2, 1, 3, 4).reshape(slices * loaded_temp_depth, 4, original_height, original_width)
+                        segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations,
+                                                                                        displacement_field.view(slices * loaded_temp_depth, original_height, original_width, 2))
+                        segmentations = segmentations.view(slices, loaded_temp_depth, 4, original_height, original_width).permute(0, 2, 1, 3, 4)
+                    else: # apply deformation in center slice only
+                        segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations, displacement_field[:, slice_region_radius, ...])
 
         # flip along the depth dimension if slope > 0
         if slope > 0:
@@ -359,26 +381,29 @@ def load_image(patient_id: str,
         if segmentation_region_depth > 1:
             segmentations = segmentations[:, :, slice_region_radius - (segmentation_region_depth - 1) // 2:slice_region_radius + (segmentation_region_depth + 1) // 2, ...]
 
-        assert image.shape[-2] == segmentations.shape[-2] and image.shape[-1] == segmentations.shape[-1]
+        if segmentation_region_depth != -1:
+            assert image.shape[-2] == segmentations.shape[-2] and image.shape[-1] == segmentations.shape[-1]
         # whether augmentation or not, we return a (slices, C, slice_depth, 512, 576) image
         if translate_rotate_augmentation:
             # rotate
             image = torchvision.transforms.functional.rotate(image.squeeze(1), angle * 180 / np.pi, expand=True,
                                                              interpolation=torchvision.transforms.InterpolationMode.NEAREST).unsqueeze(1)
-            if segmentation_region_depth == 1:
-                segmentations = torchvision.transforms.functional.rotate(segmentations, angle * 180 / np.pi, expand=True,
-                                                                         interpolation=torchvision.transforms.InterpolationMode.NEAREST)
-            else:
-                N, C, D, H, W = segmentations.shape
-                segmentations = torchvision.transforms.functional.rotate(segmentations.reshape(N * C * D, 1, H, W), angle * 180 / np.pi, expand=True,
-                                                    interpolation=torchvision.transforms.InterpolationMode.NEAREST)
-                N_, _, H, W = segmentations.shape
-                segmentations = segmentations.view(N, C, D, H, W)
+            if segmentation_region_depth != -1:
+                if segmentation_region_depth == 1:
+                    segmentations = torchvision.transforms.functional.rotate(segmentations, angle * 180 / np.pi, expand=True,
+                                                                             interpolation=torchvision.transforms.InterpolationMode.NEAREST)
+                else:
+                    N, C, D, H, W = segmentations.shape
+                    segmentations = torchvision.transforms.functional.rotate(segmentations.reshape(N * C * D, 1, H, W), angle * 180 / np.pi, expand=True,
+                                                        interpolation=torchvision.transforms.InterpolationMode.NEAREST)
+                    N_, _, H, W = segmentations.shape
+                    segmentations = segmentations.view(N, C, D, H, W)
 
             # expand randomly
             assert image.shape[-2] <= 512 and image.shape[-1] <= 576
-            assert segmentations.shape[-2] <= 512 and segmentations.shape[-1] <= 576
-            assert image.shape[-2] == segmentations.shape[-2] and image.shape[-1] == segmentations.shape[-1]
+            if segmentation_region_depth != -1:
+                assert segmentations.shape[-2] <= 512 and segmentations.shape[-1] <= 576
+                assert image.shape[-2] == segmentations.shape[-2] and image.shape[-1] == segmentations.shape[-1]
             height_required = 512 - image.shape[-2]
             width_required = 576 - image.shape[-1]
 
@@ -388,7 +413,8 @@ def load_image(patient_id: str,
             right = width_required - left
 
             image = torch.nn.functional.pad(image, (left, right, top, bottom))
-            segmentations = torch.nn.functional.pad(segmentations, (left, right, top, bottom))
+            if segmentation_region_depth != -1:
+                segmentations = torch.nn.functional.pad(segmentations, (left, right, top, bottom))
         else:
             top = (512 - image.shape[-2]) // 2
             bottom = 512 - image.shape[-2] - top
@@ -396,12 +422,14 @@ def load_image(patient_id: str,
             right = 576 - image.shape[-1] - left
 
             image = torch.nn.functional.pad(image, (left, right, top, bottom))
-            segmentations = torch.nn.functional.pad(segmentations, (left, right, top, bottom))
+            if segmentation_region_depth != -1:
+                segmentations = torch.nn.functional.pad(segmentations, (left, right, top, bottom))
 
         # downscale segmentations by 32 with max pooling
-        if segmentation_region_depth == 1:
-            segmentations = torch.nn.functional.max_pool2d(segmentations, kernel_size=32, stride=32)
-        else:
-            segmentations = torch.nn.functional.max_pool2d(segmentations.view(slices, 4 * segmentation_region_depth, 512, 576),
-                                                kernel_size=32, stride=32).view(slices, 4, segmentation_region_depth, 16, 18)
+        if segmentation_region_depth != -1:
+            if segmentation_region_depth == 1:
+                segmentations = torch.nn.functional.max_pool2d(segmentations, kernel_size=32, stride=32)
+            else:
+                segmentations = torch.nn.functional.max_pool2d(segmentations.view(slices, 4 * segmentation_region_depth, 512, 576),
+                                                    kernel_size=32, stride=32).view(slices, 4, segmentation_region_depth, 16, 18)
     return image, segmentations
