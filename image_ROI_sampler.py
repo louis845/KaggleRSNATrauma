@@ -27,13 +27,15 @@ def compute_max_angle(height: int, width: int):
 
 def load_image(patient_id: str,
                series_id: str,
-               segmentation_folder: str,
+               segmentation_folder: str, # either manager_segmentations.EXPERT_SEGMENTATION_FOLDER, manager_segmentations.TSM_SEGMENTATION_FOLDER or None, where None means do not load it
                slices = 15,
                slice_region_depth = 9,
                segmentation_region_depth = 1,
                slices_random=False,
                translate_rotate_augmentation=False,
                elastic_augmentation=False) -> (torch.Tensor, torch.Tensor):
+    if segmentation_folder is None:
+        segmentation_region_depth = -1
     assert slice_region_depth % 2 == 1, "slice_region_depth must be odd"
     assert segmentation_region_depth % 2 == 1, "segmentation_region_depth must be odd"
     assert segmentation_region_depth <= slice_region_depth, "segmentation_region_width must be less than or equal to slice_region_width"
@@ -78,7 +80,9 @@ def load_image(patient_id: str,
 
         # sample the images and the segmentation now
         image = torch.zeros((slices, 1, loaded_temp_depth, original_height, original_width), dtype=torch.float32, device=config.device)
-        if segmentation_region_depth == 1:
+        if segmentation_region_depth == -1:
+            segmentations = None
+        elif segmentation_region_depth == 1:
             segmentations = torch.zeros((slices, 4, original_height, original_width), dtype=torch.float32, device=config.device)
         else:
             segmentations = torch.zeros((slices, 4, loaded_temp_depth, original_height, original_width), dtype=torch.float32, device=config.device)
@@ -101,49 +105,31 @@ def load_image(patient_id: str,
                 image_slice = ct_3D_image[cur_slice_depths, ...]
             image_slice = torch.from_numpy(image_slice)
 
-            with h5py.File(os.path.join(segmentation_folder, str(series_id) + ".hdf5"), "r") as f:
-                segmentation_3D_image = f["segmentation_arr"]
+            if segmentation_region_depth != -1:
+                with h5py.File(os.path.join(segmentation_folder, str(series_id) + ".hdf5"), "r") as f:
+                    segmentation_3D_image = f["segmentation_arr"]
+                    if segmentation_region_depth == 1:
+                        segmentation_raw = segmentation_3D_image[slice_pos, ...].astype(dtype=bool)
+                        segmentation_slice = np.zeros((original_height, original_width, 4), dtype=bool)
+                        segmentation_slice[..., :2] = segmentation_raw[..., :2]
+                        segmentation_slice[..., 2] = np.any(segmentation_raw[..., 2:4], axis=-1)
+                        segmentation_slice[..., 3] = segmentation_raw[..., 4]
+                    else:
+                        segmentation_raw = segmentation_3D_image[cur_slice_depths, ...].astype(dtype=bool)
+                        segmentation_slice = np.zeros((loaded_temp_depth, original_height, original_width, 4), dtype=bool)
+                        segmentation_slice[..., :2] = segmentation_raw[..., :2]
+                        segmentation_slice[..., 2] = np.any(segmentation_raw[..., 2:4], axis=-1)
+                        segmentation_slice[..., 3] = segmentation_raw[..., 4]
+                    del segmentation_raw
                 if segmentation_region_depth == 1:
-                    segmentation_raw = segmentation_3D_image[slice_pos, ...].astype(dtype=bool)
-                    segmentation_slice = np.zeros((original_height, original_width, 4), dtype=bool)
-                    segmentation_slice[..., :2] = segmentation_raw[..., :2]
-                    segmentation_slice[..., 2] = np.any(segmentation_raw[..., 2:4], axis=-1)
-                    segmentation_slice[..., 3] = segmentation_raw[..., 4]
+                    segmentation_slice = torch.tensor(segmentation_slice, dtype=torch.float32).permute((2, 0, 1))
                 else:
-                    segmentation_raw = segmentation_3D_image[cur_slice_depths, ...].astype(dtype=bool)
-                    segmentation_slice = np.zeros((loaded_temp_depth, original_height, original_width, 4), dtype=bool)
-                    segmentation_slice[..., :2] = segmentation_raw[..., :2]
-                    segmentation_slice[..., 2] = np.any(segmentation_raw[..., 2:4], axis=-1)
-                    segmentation_slice[..., 3] = segmentation_raw[..., 4]
-                del segmentation_raw
-            if segmentation_region_depth == 1:
-                segmentation_slice = torch.tensor(segmentation_slice, dtype=torch.float32).permute((2, 0, 1))
-            else:
-                segmentation_slice = torch.tensor(segmentation_slice, dtype=torch.float32).permute((3, 0, 1, 2))
+                    segmentation_slice = torch.tensor(segmentation_slice, dtype=torch.float32).permute((3, 0, 1, 2))
 
-            # apply elastic deformation to height width
-            if elastic_augmentation:
-                if contracted:
-                    # 2d elastic deformation, uniform over depth
-                    displacement_field = image_sampler_augmentations.generate_displacement_field(original_width, original_height)
-                    displacement_field = torch.from_numpy(displacement_field)
-                    image_slice = image_sampler_augmentations.apply_displacement_field(image_slice, displacement_field)
-                    segmentation_slice = image_sampler_augmentations.apply_displacement_field(segmentation_slice, displacement_field)
-                else:
-                    # 3d elastic deformation (varying 2d elastic deformation over depth)
-                    displacement_field = image_sampler_augmentations.generate_displacement_field3D(original_width, original_height, slice_region_depth,
-                                                                                                   [0.3, 0.7, 1, 0.7, 0.3])
-                    displacement_field = torch.from_numpy(displacement_field)
-                    image_slice = image_sampler_augmentations.apply_displacement_field3D(image_slice, displacement_field)
-                    if segmentation_region_depth > 1:
-                        segmentation_slice = image_sampler_augmentations.apply_displacement_field3D(segmentation_slice,
-                                                                                                    displacement_field)
-                    else: # apply deformation in center slice only
-                        segmentation_slice = image_sampler_augmentations.apply_displacement_field(segmentation_slice,
-                                                        displacement_field[slice_region_radius, ...].unsqueeze(0))
 
             image[k, 0, ...].copy_(image_slice, non_blocking=True)
-            segmentations[k, ...].copy_(segmentation_slice, non_blocking=True)
+            if segmentation_region_depth != 1:
+                segmentations[k, ...].copy_(segmentation_slice, non_blocking=True)
 
         # apply elastic deformation to height width
         if elastic_augmentation:
@@ -153,11 +139,12 @@ def load_image(patient_id: str,
                                         for k in range(slices)], axis=0), dtype=torch.float32, device=config.device)
                 image = image_sampler_augmentations.apply_displacement_field3D_simple(image.reshape(slices, loaded_temp_depth, original_height, original_width),
                                                                                  displacement_field).view(slices, 1, loaded_temp_depth, original_height, original_width)
-                if segmentation_region_depth > 1:
-                    segmentations = segmentations.reshape(slices, 4 * loaded_temp_depth, original_height, original_width)
-                segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations, displacement_field)
-                if segmentation_region_depth > 1:
-                    segmentations = segmentations.view(slices, 4, loaded_temp_depth, original_height, original_width)
+                if segmentation_region_depth != 1:
+                    if segmentation_region_depth > 1:
+                        segmentations = segmentations.reshape(slices, 4 * loaded_temp_depth, original_height, original_width)
+                    segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations, displacement_field)
+                    if segmentation_region_depth > 1:
+                        segmentations = segmentations.view(slices, 4, loaded_temp_depth, original_height, original_width)
             else:
                 # 3d elastic deformation (varying 2d elastic deformation over depth), and also varying over slices
                 displacement_field = torch.stack([image_sampler_augmentations.generate_displacement_field3D(original_width, original_height, loaded_temp_depth, # (slices, loaded_temp_depth, H, W, 2)
@@ -166,14 +153,14 @@ def load_image(patient_id: str,
                 image = image_sampler_augmentations.apply_displacement_field3D_simple(image.reshape(slices * loaded_temp_depth, 1, original_height, original_width),
                                                                                       displacement_field.view(slices * loaded_temp_depth, original_height, original_width, 2))\
                                 .view(slices, 1, loaded_temp_depth, original_height, original_width)
-
-                if segmentation_region_depth > 1:
-                    segmentations = segmentations.permute(0, 2, 1, 3, 4).reshape(slices * loaded_temp_depth, 4, original_height, original_width)
-                    segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations,
-                                                                                    displacement_field.view(slices * loaded_temp_depth, original_height, original_width, 2))
-                    segmentations = segmentations.view(slices, loaded_temp_depth, 4, original_height, original_width).permute(0, 2, 1, 3, 4)
-                else: # apply deformation in center slice only
-                    segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations, displacement_field[:, slice_region_radius, ...])
+                if segmentation_region_depth != 1:
+                    if segmentation_region_depth > 1:
+                        segmentations = segmentations.permute(0, 2, 1, 3, 4).reshape(slices * loaded_temp_depth, 4, original_height, original_width)
+                        segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations,
+                                                                                        displacement_field.view(slices * loaded_temp_depth, original_height, original_width, 2))
+                        segmentations = segmentations.view(slices, loaded_temp_depth, 4, original_height, original_width).permute(0, 2, 1, 3, 4)
+                    else: # apply deformation in center slice only
+                        segmentations = image_sampler_augmentations.apply_displacement_field3D_simple(segmentations, displacement_field[:, slice_region_radius, ...])
 
 
         # flip along the depth dimension if slope > 0
@@ -192,26 +179,29 @@ def load_image(patient_id: str,
         if segmentation_region_depth > 1:
             segmentations = segmentations[:, :, slice_region_radius - (segmentation_region_depth - 1) // 2:slice_region_radius + (segmentation_region_depth + 1) // 2, ...]
 
-        assert image.shape[-2] == segmentations.shape[-2] and image.shape[-1] == segmentations.shape[-1]
+        if segmentation_region_depth != -1:
+            assert image.shape[-2] == segmentations.shape[-2] and image.shape[-1] == segmentations.shape[-1]
         # whether augmentation or not, we return a (slices, C, slice_depth, 512, 576) image
         if translate_rotate_augmentation:
             # rotate
             image = torchvision.transforms.functional.rotate(image.squeeze(1), angle * 180 / np.pi, expand=True,
                                                              interpolation=torchvision.transforms.InterpolationMode.NEAREST).unsqueeze(1)
-            if segmentation_region_depth == 1:
-                segmentations = torchvision.transforms.functional.rotate(segmentations, angle * 180 / np.pi, expand=True,
-                                                                         interpolation=torchvision.transforms.InterpolationMode.NEAREST)
-            else:
-                N, C, D, H, W = segmentations.shape
-                segmentations = torchvision.transforms.functional.rotate(segmentations.reshape(N * C * D, 1, H, W), angle * 180 / np.pi, expand=True,
-                                                    interpolation=torchvision.transforms.InterpolationMode.NEAREST)
-                N_, _, H, W = segmentations.shape
-                segmentations = segmentations.view(N, C, D, H, W)
+            if segmentation_region_depth != -1:
+                if segmentation_region_depth == 1:
+                    segmentations = torchvision.transforms.functional.rotate(segmentations, angle * 180 / np.pi, expand=True,
+                                                                             interpolation=torchvision.transforms.InterpolationMode.NEAREST)
+                else:
+                    N, C, D, H, W = segmentations.shape
+                    segmentations = torchvision.transforms.functional.rotate(segmentations.reshape(N * C * D, 1, H, W), angle * 180 / np.pi, expand=True,
+                                                        interpolation=torchvision.transforms.InterpolationMode.NEAREST)
+                    N_, _, H, W = segmentations.shape
+                    segmentations = segmentations.view(N, C, D, H, W)
 
             # expand randomly
             assert image.shape[-2] <= 512 and image.shape[-1] <= 576
-            assert segmentations.shape[-2] <= 512 and segmentations.shape[-1] <= 576
-            assert image.shape[-2] == segmentations.shape[-2] and image.shape[-1] == segmentations.shape[-1]
+            if segmentation_region_depth != -1:
+                assert segmentations.shape[-2] <= 512 and segmentations.shape[-1] <= 576
+                assert image.shape[-2] == segmentations.shape[-2] and image.shape[-1] == segmentations.shape[-1]
             height_required = 512 - image.shape[-2]
             width_required = 576 - image.shape[-1]
 
@@ -221,7 +211,8 @@ def load_image(patient_id: str,
             right = width_required - left
 
             image = torch.nn.functional.pad(image, (left, right, top, bottom))
-            segmentations = torch.nn.functional.pad(segmentations, (left, right, top, bottom))
+            if segmentation_region_depth != -1:
+                segmentations = torch.nn.functional.pad(segmentations, (left, right, top, bottom))
         else:
             top = (512 - image.shape[-2]) // 2
             bottom = 512 - image.shape[-2] - top
@@ -229,12 +220,14 @@ def load_image(patient_id: str,
             right = 576 - image.shape[-1] - left
 
             image = torch.nn.functional.pad(image, (left, right, top, bottom))
-            segmentations = torch.nn.functional.pad(segmentations, (left, right, top, bottom))
+            if segmentation_region_depth != -1:
+                segmentations = torch.nn.functional.pad(segmentations, (left, right, top, bottom))
 
-        # downscale segmentations by 32 with max pooling
-        if segmentation_region_depth == 1:
-            segmentations = torch.nn.functional.max_pool2d(segmentations, kernel_size=32, stride=32)
-        else:
-            segmentations = torch.nn.functional.max_pool2d(segmentations.view(slices, 4 * segmentation_region_depth, 512, 576),
-                                                kernel_size=32, stride=32).view(slices, 4, segmentation_region_depth, 16, 18)
+        if segmentation_region_depth != -1:
+            # downscale segmentations by 32 with max pooling
+            if segmentation_region_depth == 1:
+                segmentations = torch.nn.functional.max_pool2d(segmentations, kernel_size=32, stride=32)
+            else:
+                segmentations = torch.nn.functional.max_pool2d(segmentations.view(slices, 4 * segmentation_region_depth, 512, 576),
+                                                    kernel_size=32, stride=32).view(slices, 4, segmentation_region_depth, 16, 18)
     return image, segmentations
