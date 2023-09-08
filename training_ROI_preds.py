@@ -160,21 +160,23 @@ def training_step(record: bool):
                 is_expert = False
                 seg_folder = manager_segmentations.TSM_SEGMENTATION_FOLDER
             if use_async_sampler:
-                slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id,
+                slices, segmentations, _ = image_ROI_sampler_async.load_image(patient_id, series_id,
                                                                            segmentation_folder=seg_folder,
                                                                            slices_random=not disable_random_slices,
                                                                            translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                                            elastic_augmentation=not disable_elastic_augmentation,
                                                                            slices=num_slices,
-                                                                           segmentation_region_depth=5 if use_3d_prediction else 1)
+                                                                           segmentation_region_depth=5 if use_3d_prediction else 1,
+                                                                           injury_labels_depth=-1)
             else:
-                slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id,
+                slices, segmentations, _ = image_ROI_sampler.load_image(patient_id, series_id,
                                                                      segmentation_folder=seg_folder,
                                                                      slices_random=not disable_random_slices,
                                                                      translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                                      elastic_augmentation=not disable_elastic_augmentation,
                                                                      slices=num_slices,
-                                                                     segmentation_region_depth=5 if use_3d_prediction else 1)
+                                                                     segmentation_region_depth=5 if use_3d_prediction else 1,
+                                                                     injury_labels_depth=-1)
 
             loss, tp_per_class, tn_per_class, fp_per_class, \
                 fn_per_class, loss_per_class = single_training_step_compile(model, optimizer, slices, segmentations,
@@ -228,21 +230,23 @@ def validation_step():
                     series_id = str(manager_segmentations.randomly_pick_TSM_segmentation(patient_id))
                     seg_folder = manager_segmentations.TSM_SEGMENTATION_FOLDER
                 if use_async_sampler:
-                    slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id,
+                    slices, segmentations, _ = image_ROI_sampler_async.load_image(patient_id, series_id,
                                                                                segmentation_folder=seg_folder,
                                                                                slices_random=False,
                                                                                translate_rotate_augmentation=False,
                                                                                elastic_augmentation=False,
                                                                                slices=num_slices,
-                                                                               segmentation_region_depth=5 if use_3d_prediction else 1)
+                                                                               segmentation_region_depth=5 if use_3d_prediction else 1,
+                                                                               injury_labels_depth=-1)
                 else:
-                    slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id,
+                    slices, segmentations, _ = image_ROI_sampler.load_image(patient_id, series_id,
                                                                          segmentation_folder=seg_folder,
                                                                          slices_random=False,
                                                                          translate_rotate_augmentation=False,
                                                                          elastic_augmentation=False,
                                                                          slices=num_slices,
-                                                                         segmentation_region_depth=5 if use_3d_prediction else 1)
+                                                                         segmentation_region_depth=5 if use_3d_prediction else 1,
+                                                                         injury_labels_depth=-1)
 
                 loss, tp_per_class, tn_per_class, fp_per_class, \
                     fn_per_class, loss_per_class = single_validation_step(model, slices, segmentations)
