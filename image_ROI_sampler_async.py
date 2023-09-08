@@ -447,18 +447,24 @@ def load_image(patient_id: str,
                 injury_labels = injury_labels[np.expand_dims(slice_poses, dim=-1) + np.expand_dims(slice_span, dim=0), :]
                 injury_labels_radius = (injury_labels_depth - 1) // 2
                 if contracted:
-                    assert loaded_temp_depth % 2 == 1 # This is always odd, look at the code above
+                    assert loaded_temp_depth % 2 == 1  # This is always odd, look at the code above
                     loaded_temp_depth_radius = (loaded_temp_depth - 1) // 2
 
                     contraction_ratio = float(loaded_temp_depth) / slice_region_depth
-                    injury_labels_radius = min(max(int(injury_labels_radius * contraction_ratio), 1), loaded_temp_depth_radius)
+                    injury_labels_radius = min(max(int(injury_labels_radius * contraction_ratio), 1),
+                                               loaded_temp_depth_radius)
 
                     injury_labels = injury_labels[:, loaded_temp_depth_radius - injury_labels_radius:loaded_temp_depth_radius + injury_labels_radius + 1, :]
                 else:
                     injury_labels = injury_labels[:, slice_region_radius - injury_labels_radius:slice_region_radius + injury_labels_radius + 1, :]
 
-                injury_labels = np.min(injury_labels, axis=1) # conservative localization, we require all slices in the vicinity to be positive
+                injury_labels = np.concatenate([
+                    np.min(injury_labels[:, :, :3], axis=1),
+                    # for liver, spleen, kidney, we require all slices in the vicinity to be positive
+                    np.max(injury_labels[:, :, 3:], axis=1),
+                    # for bowel, extravasation, we require at least one slice in the vicinity to be positive, since its more localised
+                ], axis=-1)
             else:
-                injury_labels = injury_labels[slice_poses, :]
+                injury_labels = injury_labels[slice_poses, :]  # extract the central slice only
 
     return image, segmentations, injury_labels

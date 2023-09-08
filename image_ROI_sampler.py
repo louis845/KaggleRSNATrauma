@@ -256,8 +256,11 @@ def load_image(patient_id: str,
                 else:
                     injury_labels = injury_labels[:, slice_region_radius - injury_labels_radius:slice_region_radius + injury_labels_radius + 1, :]
 
-                injury_labels = np.min(injury_labels, axis=1) # conservative localization, we require all slices in the vicinity to be positive
+                injury_labels = np.concatenate([
+                    np.min(injury_labels[:, :, :3], axis=1), # for liver, spleen, kidney, we require all slices in the vicinity to be positive
+                    np.max(injury_labels[:, :, 3:], axis=1), # for bowel, extravasation, we require at least one slice in the vicinity to be positive, since its more localised
+                ], axis=-1)
             else:
-                injury_labels = injury_labels[slice_poses, :]
+                injury_labels = injury_labels[slice_poses, :] # extract the central slice only
 
     return image, segmentations, injury_labels
