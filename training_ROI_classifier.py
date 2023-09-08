@@ -27,6 +27,10 @@ import training_shuffle_utils
 
 
 class MetricKeys:
+    METRIC_TYPE_LOSS = "loss"
+    METRIC_TYPE_INJURY = "injury"
+    METRIC_TYPE_SLICE_INJURY = "slice_injury"
+
     LOSS = "loss"
     LIVER = "liver"
     LIVER_LOSS = "liver_loss"
@@ -37,8 +41,22 @@ class MetricKeys:
     BOWEL = "bowel"
     BOWEL_LOSS = "bowel_loss"
 
+    INJURY_LOSS = "injury_loss"
+    LIVER_INJURY = "liver_injury"
+    LIVER_SLICE_INJURY = "liver_slice_injury"
+    LIVER_INJURY_LOSS = "liver_injury_loss"
+    SPLEEN_INJURY = "spleen_injury"
+    SPLEEN_SLICE_INJURY = "spleen_slice_injury"
+    SPLEEN_INJURY_LOSS = "spleen_injury_loss"
+    KIDNEY_INJURY = "kidney_injury"
+    KIDNEY_SLICE_INJURY = "kidney_slice_injury"
+    KIDNEY_INJURY_LOSS = "kidney_injury_loss"
+    BOWEL_INJURY = "bowel_injury"
+    BOWEL_SLICE_INJURY = "bowel_slice_injury"
+    BOWEL_INJURY_LOSS = "bowel_injury_loss"
+
     @staticmethod
-    def get_metric_key_by_class_code(class_code: int, is_loss: bool):
+    def get_segmentation_metric_key_by_class_code(class_code: int, is_loss: bool):
         if class_code == 0:
             if is_loss:
                 return MetricKeys.LIVER_LOSS
@@ -62,20 +80,102 @@ class MetricKeys:
         else:
             raise ValueError("Invalid class code")
 
+    @staticmethod
+    def get_injury_metric_key_by_class_code(class_code: int, metric_type: str):
+        assert metric_type in [MetricKeys.METRIC_TYPE_LOSS, MetricKeys.METRIC_TYPE_INJURY, MetricKeys.METRIC_TYPE_SLICE_INJURY]
+        if class_code == 0:
+            if metric_type == MetricKeys.METRIC_TYPE_LOSS:
+                return MetricKeys.LIVER_INJURY_LOSS
+            elif metric_type == MetricKeys.METRIC_TYPE_INJURY:
+                return MetricKeys.LIVER_INJURY
+            elif metric_type == MetricKeys.METRIC_TYPE_SLICE_INJURY:
+                return MetricKeys.LIVER_SLICE_INJURY
+        elif class_code == 1:
+            if metric_type == MetricKeys.METRIC_TYPE_LOSS:
+                return MetricKeys.SPLEEN_INJURY_LOSS
+            elif metric_type == MetricKeys.METRIC_TYPE_INJURY:
+                return MetricKeys.SPLEEN_INJURY
+            elif metric_type == MetricKeys.METRIC_TYPE_SLICE_INJURY:
+                return MetricKeys.SPLEEN_SLICE_INJURY
+        elif class_code == 2:
+            if metric_type == MetricKeys.METRIC_TYPE_LOSS:
+                return MetricKeys.KIDNEY_INJURY_LOSS
+            elif metric_type == MetricKeys.METRIC_TYPE_INJURY:
+                return MetricKeys.KIDNEY_INJURY
+            elif metric_type == MetricKeys.METRIC_TYPE_SLICE_INJURY:
+                return MetricKeys.KIDNEY_SLICE_INJURY
+        elif class_code == 3:
+            if metric_type == MetricKeys.METRIC_TYPE_LOSS:
+                return MetricKeys.BOWEL_INJURY_LOSS
+            elif metric_type == MetricKeys.METRIC_TYPE_INJURY:
+                return MetricKeys.BOWEL_INJURY
+            elif metric_type == MetricKeys.METRIC_TYPE_SLICE_INJURY:
+                return MetricKeys.BOWEL_SLICE_INJURY
 
-def get_representing_shuffle_entry(patient_id: int):
-    return {"patient_id": patient_id}
+class UsedLabelManager:
+    levels_used = [2, 2, 2]
+
+    @staticmethod
+    def get_liver_level():
+        return UsedLabelManager.levels_used[0]
+
+    @staticmethod
+    def get_spleen_level():
+        return UsedLabelManager.levels_used[1]
+
+    @staticmethod
+    def get_kidney_level():
+        return UsedLabelManager.levels_used[2]
 
 
-def get_patient_id_from_shuffle_entry(shuffle_entry: dict) -> int:
-    return shuffle_entry["patient_id"]
+class TrainingTypes:
+    SEGMENTATIONS = 0
+    INJURIES = 1
+    INJURIES_WITH_GUIDANCE = 2
+
+class ShuffleKeys:
+    PATIENT_ID = "patient_id"
+    TRAINING_TYPE = "training_type"
+
+def create_shuffle_entry(patient_id: int, training_type: int):
+    assert training_type in [TrainingTypes.SEGMENTATIONS, TrainingTypes.INJURIES, TrainingTypes.INJURIES_WITH_GUIDANCE]
+    return {ShuffleKeys.PATIENT_ID: patient_id, ShuffleKeys.TRAINING_TYPE: training_type}
+
+
+def initialize_training_entries(training_entries: list[int], validation_entries: list[int], extra_nonexpert_segmentation_training_ratio):
+    expert_training_entries = manager_segmentations.restrict_patients_to_expert_segmentation(training_entries)
+    extra_training_entries = manager_segmentations.restrict_patients_to_TSM_but_no_expert_segmentation(training_entries)
+
+    print("Detected {} expert training entries, {} extra training entries".format(len(expert_training_entries), len(extra_training_entries)))
+    if len(expert_training_entries) < 50:
+        raise ValueError("Not enough expert training entries.")
+
+    injury_training_list = []
+    for entry in training_entries:
+        if manager_segmentations.patient_has_expert_segmentations(entry):
+            injury_training_list.append(create_shuffle_entry(entry, TrainingTypes.INJURIES_WITH_GUIDANCE))
+        else:
+            injury_training_list.append(create_shuffle_entry(entry, TrainingTypes.INJURIES))
+    segmentation_training_list = [create_shuffle_entry(entry, TrainingTypes.SEGMENTATIONS)
+                                  for entry in expert_training_entries]
+    segmentation_extra_training_list = [create_shuffle_entry(entry, TrainingTypes.SEGMENTATIONS)
+                                        for entry in extra_training_entries]
+    if len(extra_training_entries) > 0 and extra_nonexpert_segmentation_training_ratio > 0:
+        training_entries = training_shuffle_utils.MultipleBiasedShuffleInfo(injury_training_list, [segmentation_training_list, segmentation_extra_training_list],
+                                                         extra_ratio=1.0, within_extra_ratios=[1.0, extra_nonexpert_segmentation_training_ratio])
+    else:
+        training_entries = training_shuffle_utils.MultipleBiasedShuffleInfo(injury_training_list, [segmentation_training_list],
+                                                         extra_ratio=1.0, within_extra_ratios=[1.0])
+
+    return training_entries, validation_entries
+
 
 
 bowel_mask_tensor = None  # to be initialized with tensor_2d3d
 
 
 # focal loss with exponent 2
-def focal_loss(output: torch.Tensor, target: torch.Tensor, reduce_channels=True, include_bowel=True):
+def focal_loss_segmentation(output: torch.Tensor, target: torch.Tensor, reduce_channels=True, include_bowel=True):
     # logsumexp trick for numerical stability
     binary_ce = torch.nn.functional.binary_cross_entropy_with_logits(output, target, reduction="none") * (
                 1 + target * (positive_weight - 1))
@@ -86,15 +186,18 @@ def focal_loss(output: torch.Tensor, target: torch.Tensor, reduce_channels=True,
     else:
         return torch.mean(((target - torch.sigmoid(output)) ** 2) * binary_ce, dim=tensor_2d3d)
 
+def focal_loss_slicepreds(preds: torch.Tensor, target: torch.Tensor):
 
-def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
+
+
+def single_training_step_segmentation(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
                          slices_: torch.Tensor, segmentations_: torch.Tensor, is_expert: bool):
     optimizer_.zero_grad()
     pred_segmentations = model_(slices_)
     with torch.no_grad():
         preds = (pred_segmentations > 0).to(torch.float32)
     # we include the bowel only for expert segmentations, and penalize non-expert segmentations only half as much
-    loss = focal_loss(pred_segmentations, segmentations_, reduce_channels=True, include_bowel=is_expert)
+    loss = focal_loss_segmentation(pred_segmentations, segmentations_, reduce_channels=True, include_bowel=is_expert)
     if not is_expert:
         loss = loss * 0.5
     loss.backward()
@@ -115,6 +218,101 @@ def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimi
 
     return loss, tp_per_class, tn_per_class, fp_per_class, fn_per_class, loss_per_class
 
+def training_segmentation()
+
+def training_step(record: bool):
+    if record:
+        for key in train_metrics:
+            train_metrics[key].reset()
+
+    # shuffle
+    shuffle_indices = training_entries.get_random_shuffle_indices()
+
+    # training
+    trained = 0
+    with tqdm.tqdm(total=len(shuffle_indices)) as pbar:
+        while trained < len(shuffle_indices):
+            shuffle_info = training_entries[shuffle_indices[trained]]
+            patient_id = shuffle_info[ShuffleKeys.PATIENT_ID]
+            training_type = shuffle_info[ShuffleKeys.TRAINING_TYPE]
+
+            # prepare options for image sampler
+            if training_type == TrainingTypes.SEGMENTATIONS:
+                if manager_segmentations.patient_has_expert_segmentations(patient_id):
+                    series_id = str(manager_segmentations.randomly_pick_expert_segmentation(patient_id))
+                    is_expert = True
+                    seg_folder = manager_segmentations.EXPERT_SEGMENTATION_FOLDER
+                    injury_labels_depth = -1
+                else:
+                    series_id = str(manager_segmentations.randomly_pick_TSM_segmentation(patient_id))
+                    is_expert = False
+                    seg_folder = manager_segmentations.TSM_SEGMENTATION_FOLDER
+                    injury_labels_depth = -1
+            elif training_type == TrainingTypes.INJURIES:
+                any_injury = manager_folds.has_injury(patient_id)
+                series_id = str(manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0])
+                seg_folder = None
+                if any_injury:
+                    injury_labels_depth = 5 if use_3d_prediction else 1
+                else:
+                    injury_labels_depth = -1
+
+            if use_async_sampler:
+                slices, segmentations, injury_labels = image_ROI_sampler_async.load_image(patient_id, series_id,
+                                                                           segmentation_folder=seg_folder,
+                                                                           slices_random=not disable_random_slices,
+                                                                           translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                                           elastic_augmentation=not disable_elastic_augmentation,
+                                                                           slices=num_slices,
+                                                                           segmentation_region_depth=5 if use_3d_prediction else 1,
+                                                                           injury_labels_depth=injury_labels_depth)
+            else:
+                slices, segmentations, injury_labels = image_ROI_sampler.load_image(patient_id, series_id,
+                                                                     segmentation_folder=seg_folder,
+                                                                     slices_random=not disable_random_slices,
+                                                                     translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                                     elastic_augmentation=not disable_elastic_augmentation,
+                                                                     slices=num_slices,
+                                                                     segmentation_region_depth=5 if use_3d_prediction else 1,
+                                                                     injury_labels_depth=injury_labels_depth)
+
+            # do training now
+            if training_type == TrainingTypes.SEGMENTATIONS:
+                loss, tp_per_class, tn_per_class, fp_per_class, \
+                    fn_per_class, loss_per_class = single_training_step_compile(model, optimizer, slices, segmentations,
+                                                                                is_expert=is_expert)
+                loss = loss.item()
+                tp_per_class = tp_per_class.cpu().numpy()
+                tn_per_class = tn_per_class.cpu().numpy()
+                fp_per_class = fp_per_class.cpu().numpy()
+                fn_per_class = fn_per_class.cpu().numpy()
+                loss_per_class = loss_per_class.cpu().numpy()
+
+                # record
+                if record:
+                    # compute metrics
+                    for class_code in range(4):
+                        if class_code == 3 and not is_expert:
+                            continue
+                        organ_loss_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=True)
+                        organ_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=False)
+                        train_metrics[organ_loss_key].add(loss_per_class[class_code], 1)
+                        train_metrics[organ_key].add_direct(tp_per_class[class_code], tn_per_class[class_code],
+                                                            fp_per_class[class_code], fn_per_class[class_code])
+                    train_metrics[MetricKeys.LOSS].add(loss, 1)
+            elif (training_type == TrainingTypes.INJURIES or training_type == TrainingTypes.INJURIES_WITH_GUIDANCE):
+
+
+            trained += 1
+            pbar.update(1)
+
+    if record:
+        current_metrics = {}
+        for key in train_metrics:
+            train_metrics[key].write_to_dict(current_metrics)
+
+        for key in current_metrics:
+            train_history[key].append(current_metrics[key])
 
 def single_validation_step(model_: torch.nn.Module,
                            slices_: torch.Tensor,
@@ -136,80 +334,6 @@ def single_validation_step(model_: torch.nn.Module,
     loss_per_class = focal_loss(pred_segmentations, segmentations_, reduce_channels=False)
 
     return loss, tp_per_class, tn_per_class, fp_per_class, fn_per_class, loss_per_class
-
-
-def training_step(record: bool):
-    if record:
-        for key in train_metrics:
-            train_metrics[key].reset()
-
-    # shuffle
-    shuffle_indices = training_entries.get_random_shuffle_indices()
-
-    # training
-    trained = 0
-    with tqdm.tqdm(total=len(shuffle_indices)) as pbar:
-        while trained < len(shuffle_indices):
-            patient_id = get_patient_id_from_shuffle_entry(training_entries[shuffle_indices[trained]])  # patient id
-            if manager_segmentations.patient_has_expert_segmentations(patient_id):
-                series_id = str(manager_segmentations.randomly_pick_expert_segmentation(patient_id))
-                is_expert = True
-                seg_folder = manager_segmentations.EXPERT_SEGMENTATION_FOLDER
-            else:
-                series_id = str(manager_segmentations.randomly_pick_TSM_segmentation(patient_id))
-                is_expert = False
-                seg_folder = manager_segmentations.TSM_SEGMENTATION_FOLDER
-            if use_async_sampler:
-                slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id,
-                                                                           segmentation_folder=seg_folder,
-                                                                           slices_random=not disable_random_slices,
-                                                                           translate_rotate_augmentation=not disable_rotpos_augmentation,
-                                                                           elastic_augmentation=not disable_elastic_augmentation,
-                                                                           slices=num_slices,
-                                                                           segmentation_region_depth=5 if use_3d_prediction else 1)
-            else:
-                slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id,
-                                                                     segmentation_folder=seg_folder,
-                                                                     slices_random=not disable_random_slices,
-                                                                     translate_rotate_augmentation=not disable_rotpos_augmentation,
-                                                                     elastic_augmentation=not disable_elastic_augmentation,
-                                                                     slices=num_slices,
-                                                                     segmentation_region_depth=5 if use_3d_prediction else 1)
-
-            loss, tp_per_class, tn_per_class, fp_per_class, \
-                fn_per_class, loss_per_class = single_training_step_compile(model, optimizer, slices, segmentations,
-                                                                            is_expert=is_expert)
-            loss = loss.item()
-            tp_per_class = tp_per_class.cpu().numpy()
-            tn_per_class = tn_per_class.cpu().numpy()
-            fp_per_class = fp_per_class.cpu().numpy()
-            fn_per_class = fn_per_class.cpu().numpy()
-            loss_per_class = loss_per_class.cpu().numpy()
-
-            # record
-            if record:
-                # compute metrics
-                for class_code in range(4):
-                    if class_code == 3 and not is_expert:
-                        continue
-                    organ_loss_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=True)
-                    organ_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=False)
-                    train_metrics[organ_loss_key].add(loss_per_class[class_code], 1)
-                    train_metrics[organ_key].add_direct(tp_per_class[class_code], tn_per_class[class_code],
-                                                        fp_per_class[class_code], fn_per_class[class_code])
-                train_metrics[MetricKeys.LOSS].add(loss, 1)
-
-            trained += 1
-            pbar.update(1)
-
-    if record:
-        current_metrics = {}
-        for key in train_metrics:
-            train_metrics[key].write_to_dict(current_metrics)
-
-        for key in current_metrics:
-            train_history[key].append(current_metrics[key])
-
 
 def validation_step():
     for key in val_metrics:
@@ -273,9 +397,84 @@ def validation_step():
         val_history[key].append(current_metrics[key])
 
 
+def create_metrics():
+    # create segmentation metrics
+    # liver: 0
+    train_metrics[MetricKeys.LIVER] = metrics.BinaryMetrics(name="train_liver")
+    val_metrics[MetricKeys.LIVER] = metrics.BinaryMetrics(name="val_liver")
+    train_metrics[MetricKeys.LIVER_LOSS] = metrics.NumericalMetric(name="train_liver_loss")
+    val_metrics[MetricKeys.LIVER_LOSS] = metrics.NumericalMetric(name="val_liver_loss")
+    # spleen: 1
+    train_metrics[MetricKeys.SPLEEN] = metrics.BinaryMetrics(name="train_spleen")
+    val_metrics[MetricKeys.SPLEEN] = metrics.BinaryMetrics(name="val_spleen")
+    train_metrics[MetricKeys.SPLEEN_LOSS] = metrics.NumericalMetric(name="train_spleen_loss")
+    val_metrics[MetricKeys.SPLEEN_LOSS] = metrics.NumericalMetric(name="val_spleen_loss")
+    # kidney: 2
+    train_metrics[MetricKeys.KIDNEY] = metrics.BinaryMetrics(name="train_kidney")
+    val_metrics[MetricKeys.KIDNEY] = metrics.BinaryMetrics(name="val_kidney")
+    train_metrics[MetricKeys.KIDNEY_LOSS] = metrics.NumericalMetric(name="train_kidney_loss")
+    val_metrics[MetricKeys.KIDNEY_LOSS] = metrics.NumericalMetric(name="val_kidney_loss")
+    # bowel: 3
+    train_metrics[MetricKeys.BOWEL] = metrics.BinaryMetrics(name="train_bowel")
+    val_metrics[MetricKeys.BOWEL] = metrics.BinaryMetrics(name="val_bowel")
+    train_metrics[MetricKeys.BOWEL_LOSS] = metrics.NumericalMetric(name="train_bowel_loss")
+    val_metrics[MetricKeys.BOWEL_LOSS] = metrics.NumericalMetric(name="val_bowel_loss")
+    # general loss
+    train_metrics[MetricKeys.LOSS] = metrics.NumericalMetric(name="train_loss")
+    val_metrics[MetricKeys.LOSS] = metrics.NumericalMetric(name="val_loss")
+
+    # create injury metrics
+    # liver: 0
+    if UsedLabelManager.get_liver_level() == 1:
+        train_metrics[MetricKeys.LIVER_INJURY] = metrics.BinaryMetrics(name="train_liver_injury")
+        val_metrics[MetricKeys.LIVER_INJURY] = metrics.BinaryMetrics(name="val_liver_injury")
+        train_metrics[MetricKeys.LIVER_SLICE_INJURY] = metrics.BinaryMetrics(name="train_liver_slice_injury")
+        val_metrics[MetricKeys.LIVER_SLICE_INJURY] = metrics.BinaryMetrics(name="val_liver_slice_injury")
+    else:
+        train_metrics[MetricKeys.LIVER_INJURY] = metrics.TernaryMetrics(name="train_liver_injury")
+        val_metrics[MetricKeys.LIVER_INJURY] = metrics.TernaryMetrics(name="val_liver_injury")
+        train_metrics[MetricKeys.LIVER_SLICE_INJURY] = metrics.TernaryMetrics(name="train_liver_slice_injury")
+        val_metrics[MetricKeys.LIVER_SLICE_INJURY] = metrics.TernaryMetrics(name="val_liver_slice_injury")
+    train_metrics[MetricKeys.LIVER_INJURY_LOSS] = metrics.NumericalMetric(name="train_liver_injury_loss")
+    val_metrics[MetricKeys.LIVER_INJURY_LOSS] = metrics.NumericalMetric(name="val_liver_injury_loss")
+    # spleen: 1
+    if UsedLabelManager.get_spleen_level() == 1:
+        train_metrics[MetricKeys.SPLEEN_INJURY] = metrics.BinaryMetrics(name="train_spleen_injury")
+        val_metrics[MetricKeys.SPLEEN_INJURY] = metrics.BinaryMetrics(name="val_spleen_injury")
+        train_metrics[MetricKeys.SPLEEN_SLICE_INJURY] = metrics.BinaryMetrics(name="train_spleen_slice_injury")
+        val_metrics[MetricKeys.SPLEEN_SLICE_INJURY] = metrics.BinaryMetrics(name="val_spleen_slice_injury")
+    else:
+        train_metrics[MetricKeys.SPLEEN_INJURY] = metrics.TernaryMetrics(name="train_spleen_injury")
+        val_metrics[MetricKeys.SPLEEN_INJURY] = metrics.TernaryMetrics(name="val_spleen_injury")
+        train_metrics[MetricKeys.SPLEEN_SLICE_INJURY] = metrics.TernaryMetrics(name="train_spleen_slice_injury")
+        val_metrics[MetricKeys.SPLEEN_SLICE_INJURY] = metrics.TernaryMetrics(name="val_spleen_slice_injury")
+    train_metrics[MetricKeys.SPLEEN_INJURY_LOSS] = metrics.NumericalMetric(name="train_spleen_injury_loss")
+    val_metrics[MetricKeys.SPLEEN_INJURY_LOSS] = metrics.NumericalMetric(name="val_spleen_injury_loss")
+    # kidney: 2
+    if UsedLabelManager.get_kidney_level() == 1:
+        train_metrics[MetricKeys.KIDNEY_INJURY] = metrics.BinaryMetrics(name="train_kidney_injury")
+        val_metrics[MetricKeys.KIDNEY_INJURY] = metrics.BinaryMetrics(name="val_kidney_injury")
+        train_metrics[MetricKeys.KIDNEY_SLICE_INJURY] = metrics.BinaryMetrics(name="train_kidney_slice_injury")
+        val_metrics[MetricKeys.KIDNEY_SLICE_INJURY] = metrics.BinaryMetrics(name="val_kidney_slice_injury")
+    else:
+        train_metrics[MetricKeys.KIDNEY_INJURY] = metrics.TernaryMetrics(name="train_kidney_injury")
+        val_metrics[MetricKeys.KIDNEY_INJURY] = metrics.TernaryMetrics(name="val_kidney_injury")
+        train_metrics[MetricKeys.KIDNEY_SLICE_INJURY] = metrics.TernaryMetrics(name="train_kidney_slice_injury")
+        val_metrics[MetricKeys.KIDNEY_SLICE_INJURY] = metrics.TernaryMetrics(name="val_kidney_slice_injury")
+    train_metrics[MetricKeys.KIDNEY_INJURY_LOSS] = metrics.NumericalMetric(name="train_kidney_injury_loss")
+    val_metrics[MetricKeys.KIDNEY_INJURY_LOSS] = metrics.NumericalMetric(name="val_kidney_injury_loss")
+    # bowel: 3
+    train_metrics[MetricKeys.BOWEL_INJURY] = metrics.BinaryMetrics(name="train_bowel_injury")
+    val_metrics[MetricKeys.BOWEL_INJURY] = metrics.BinaryMetrics(name="val_bowel_injury")
+    train_metrics[MetricKeys.BOWEL_SLICE_INJURY] = metrics.BinaryMetrics(name="train_bowel_slice_injury")
+    val_metrics[MetricKeys.BOWEL_SLICE_INJURY] = metrics.BinaryMetrics(name="val_bowel_slice_injury")
+    train_metrics[MetricKeys.BOWEL_INJURY_LOSS] = metrics.NumericalMetric(name="train_bowel_injury_loss")
+    val_metrics[MetricKeys.BOWEL_INJURY_LOSS] = metrics.NumericalMetric(name="val_bowel_injury_loss")
+
 def print_history(metrics_history: collections.defaultdict[str, list]):
     for key in metrics_history:
-        print("{}      {}".format(key, metrics_history[key][-1]))
+        if "injury" in key:
+            print("{}      {}".format(key, metrics_history[key][-1]))
 
 
 if __name__ == "__main__":
@@ -284,21 +483,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a ROI prediction model.")
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs to train for. Default 100.")
     parser.add_argument("--learning_rate", type=float, default=3e-4, help="Learning rate to use. Default 3e-4.")
-    parser.add_argument("--momentum", type=float, default=0.9,
-                        help="Momentum to use. Default 0.9. This would be the momentum for SGD, and beta1 for Adam.")
-    parser.add_argument("--second_momentum", type=float, default=0.999,
-                        help="Second momentum to use. Default 0.999. This would be beta2 for Adam. Ignored if SGD.")
-    parser.add_argument("--num_extra_nonexpert_training", type=int, default=0,
-                        help="Number of extra non-expert segmentations to use for training. Default 0.")
-    parser.add_argument("--disable_random_slices", action="store_true",
-                        help="Whether to disable random slices. Default False.")
-    parser.add_argument("--disable_rotpos_augmentation", action="store_true",
-                        help="Whether to disable rotation and translation augmentation. Default False.")
-    parser.add_argument("--disable_elastic_augmentation", action="store_true",
-                        help="Whether to disable elastic augmentation. Default False.")
+    parser.add_argument("--momentum", type=float, default=0.9, help="Momentum to use. Default 0.9. This would be the momentum for SGD, and beta1 for Adam.")
+    parser.add_argument("--second_momentum", type=float, default=0.999, help="Second momentum to use. Default 0.999. This would be beta2 for Adam. Ignored if SGD.")
+    parser.add_argument("--extra_nonexpert_segmentation_training_ratio", type=float, default=0.0, help="Ratio of extra non-expert segmentations to use for training. Default 0.0.")
+    parser.add_argument("--disable_random_slices", action="store_true", help="Whether to disable random slices. Default False.")
+    parser.add_argument("--disable_rotpos_augmentation", action="store_true", help="Whether to disable rotation and translation augmentation. Default False.")
+    parser.add_argument("--disable_elastic_augmentation", action="store_true", help="Whether to disable elastic augmentation. Default False.")
     parser.add_argument("--num_slices", type=int, default=15, help="Number of slices to use. Default 15.")
-    parser.add_argument("--optimizer", type=str, default="adam",
-                        help="Which optimizer to use. Available options: adam, sgd. Default adam.")
+    parser.add_argument("--optimizer", type=str, default="adam", help="Which optimizer to use. Available options: adam, sgd. Default adam.")
     parser.add_argument("--epochs_per_save", type=int, default=2, help="Number of epochs between saves. Default 2.")
     parser.add_argument("--channel_progression", type=int, nargs="+", default=[2, 3, 6, 9, 15, 32, 128, 256, 512, 1024],
                         help="The channels for progression in ResNet backbone.")
@@ -306,18 +498,15 @@ if __name__ == "__main__":
                         help="Number of hidden 3d blocks for ResNet backbone.")
     parser.add_argument("--hidden_blocks", type=int, nargs="+", default=[1, 2, 6, 8, 23, 8],
                         help="Number of hidden 2d blocks for ResNet backbone.")
-    parser.add_argument("--bottleneck_factor", type=int, default=4,
-                        help="The bottleneck factor of the ResNet backbone. Default 4.")
-    parser.add_argument("--squeeze_excitation", action="store_false",
-                        help="Whether to use squeeze and excitation. Default True.")
-    parser.add_argument("--use_3d_prediction", action="store_true",
-                        help="Whether or not to predict a 3D region. Default False.")
-    parser.add_argument("--positive_weight", type=float, default=3.0,
-                        help="The weight for positive samples. Default 3.0.")
-    parser.add_argument("--use_async_sampler", action="store_true",
-                        help="Whether or not to use an asynchronous sampler. Default False.")
-    parser.add_argument("--num_extra_steps", type=int, default=0,
-                        help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
+    parser.add_argument("--bottleneck_factor", type=int, default=4, help="The bottleneck factor of the ResNet backbone. Default 4.")
+    parser.add_argument("--squeeze_excitation", action="store_false", help="Whether to use squeeze and excitation. Default True.")
+    parser.add_argument("--use_3d_prediction", action="store_true", help="Whether or not to predict a 3D region. Default False.")
+    parser.add_argument("--positive_weight", type=float, default=5.0, help="The weight for positive samples for segmentation. Default 5.0.")
+    parser.add_argument("--use_async_sampler", action="store_true", help="Whether or not to use an asynchronous sampler. Default False.")
+    parser.add_argument("--num_extra_steps", type=int, default=0, help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
+    parser.add_argument("--liver", type=int, default=1, help="Which levels of liver labels to use. Must be 1, 2. Default 1.")
+    parser.add_argument("--kidney", type=int, default=1, help="Which levels of kidney labels to use. Must be 1, 2. Default 1.")
+    parser.add_argument("--spleen", type=int, default=1, help="Which levels of spleen labels to use. Must be 1, 2. Default 1.")
     manager_folds.add_argparse_arguments(parser)
     manager_models.add_argparse_arguments(parser)
     config.add_argparse_arguments(parser)
@@ -327,39 +516,26 @@ if __name__ == "__main__":
     training_entries, validation_entries, train_dset_name, val_dset_name = manager_folds.parse_args(args)
     assert type(training_entries) == list
     assert type(validation_entries) == list
-    training_entries = np.array(training_entries)
-    validation_entries = np.array(validation_entries)
     print("Training dataset: {}".format(train_dset_name))
     print("Validation dataset: {}".format(val_dset_name))
+    training_entries, validation_entries = initialize_training_entries(training_entries, validation_entries, args.extra_nonexpert_segmentation_training_ratio)
 
-    for patient_id in training_entries:
-        assert manager_segmentations.patient_has_expert_segmentations(
-            patient_id) or manager_segmentations.patient_has_TSM_segmentations(
-            patient_id), "Patient {} has no expert or TSM segmentations.".format(patient_id)
-    for patient_id in validation_entries:
-        assert manager_segmentations.patient_has_expert_segmentations(
-            patient_id) or manager_segmentations.patient_has_TSM_segmentations(
-            patient_id), "Patient {} has no expert or TSM segmentations.".format(patient_id)
-    if args.num_extra_nonexpert_training > 0:
-        print("Using {} extra non-expert segmentations for training.".format(args.num_extra_nonexpert_training))
-        extra_entries = [int(x) for x in manager_segmentations.get_patients_with_TSM_segmentation()]
-        assert len(set(extra_entries).intersection(set([int(x) for x in validation_entries]))) == 0, \
-            "Some validation patients have TSM (non-expert) segmentations."
-        training_entries = training_shuffle_utils.BiasedShuffleInfo(shuffle_info=[get_representing_shuffle_entry(int(x)) for
-                                                                            x in training_entries],
-                                                 shuffle_info_extra=[get_representing_shuffle_entry(int(x)) for
-                                                                            x in extra_entries],
-                                                 extra_shuffle_samples=args.num_extra_nonexpert_training)
-    else:
-        print("Not using any extra segmentations.")
-        training_entries = training_shuffle_utils.ShuffleInfo(shuffle_info=[get_representing_shuffle_entry(int(x)) for
-                                                                            x in training_entries])
 
     # initialize gpu
     config.parse_args(args)
 
     # get model directories
     model_dir, prev_model_dir = manager_models.parse_args(args)
+
+    # get which labels to use
+    liver = args.liver
+    spleen = args.spleen
+    kidney = args.kidney
+    assert liver in [1, 2], "Liver must be 1, or 2."
+    assert spleen in [1, 2], "Spleen must be 1, or 2."
+    assert kidney in [1, 2], "Kidney must be 1, or 2."
+    UsedLabelManager.levels_used = [liver, spleen, kidney]
+    print("Using label levels {} for liver, {} for spleen, and {} for kidney.".format(liver, spleen, kidney))
 
     # obtain model and training parameters
     epochs = args.epochs
@@ -421,15 +597,17 @@ if __name__ == "__main__":
         deep_channels = backbone.get_deep3d_channels()
         print("Using 3D prediction. Detected deep channels: " + str(deep_channels) + "   Last channel: " + str(
             channel_progression[-1]))
-        model = model_3d_patch_resnet.NeighborhoodROINet(backbone=backbone, first_channels=deep_channels[0],
-                                                         mid_channels=deep_channels[1],
-                                                         last_channels=channel_progression[-1],
-                                                         feature_width=18, feature_height=16)
+        model = model_3d_patch_resnet.SupervisedAttentionClassifier3D(backbone=backbone, backbone_first_channels=deep_channels[0],
+                                                        backbone_mid_channels=deep_channels[1], backbone_last_channels=channel_progression[-1],
+                                                        backbone_feature_width=18, backbone_feature_height=16, conv_hidden_channels=128,
+                                                        classification_levels=UsedLabelManager.levels_used, reduction="union")
         tensor_2d3d = (0, 2, 3, 4)
         bowel_mask_tensor = torch.tensor([1, 1, 1, 0], dtype=torch.float32, device=config.device) \
             .unsqueeze(0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
     else:
-        model = model_3d_patch_resnet.LocalizedROINet(backbone=backbone, num_channels=channel_progression[-1])
+        model = model_3d_patch_resnet.SupervisedAttentionClassifier(backbone=backbone, backbone_out_channels=channel_progression[-1],
+                                                                    conv_hidden_channels=128, classification_levels=UsedLabelManager.levels_used,
+                                                                    reduction="union")
         tensor_2d3d = (0, 2, 3)
         bowel_mask_tensor = torch.tensor([1, 1, 1, 0], dtype=torch.float32, device=config.device) \
             .unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
@@ -463,12 +641,12 @@ if __name__ == "__main__":
                 g["momentum"] = momentum
 
     model_config = {
-        "model": "Organ ROI classifier",
+        "model": "Organ injury predictions with attention using ROI classification as deep supervision",
         "epochs": epochs,
         "learning_rate": learning_rate,
         "momentum": momentum,
         "second_momentum": second_momentum,
-        "num_extra_nonexpert_training": args.num_extra_nonexpert_training,
+        "extra_nonexpert_segmentation_training_ratio": args.extra_nonexpert_segmentation_training_ratio,
         "disable_random_slices": disable_random_slices,
         "disable_rotpos_augmentation": disable_rotpos_augmentation,
         "disable_elastic_augmentation": disable_elastic_augmentation,
@@ -484,9 +662,12 @@ if __name__ == "__main__":
         "positive_weight": positive_weight,
         "use_async_sampler": use_async_sampler,
         "num_extra_steps": num_extra_steps,
+        "liver": liver,
+        "kidney": kidney,
+        "spleen": spleen,
         "train_dataset": train_dset_name,
         "val_dataset": val_dset_name,
-        "training_script": "training_ROI_preds.py",
+        "training_script": "training_ROI_classifier.py",
     }
 
     # Save the model config
@@ -498,29 +679,7 @@ if __name__ == "__main__":
     train_metrics = {}
     val_history = collections.defaultdict(list)
     val_metrics = {}
-    # liver: 0
-    train_metrics[MetricKeys.LIVER] = metrics.BinaryMetrics(name="train_liver")
-    val_metrics[MetricKeys.LIVER] = metrics.BinaryMetrics(name="val_liver")
-    train_metrics[MetricKeys.LIVER_LOSS] = metrics.NumericalMetric(name="train_liver_loss")
-    val_metrics[MetricKeys.LIVER_LOSS] = metrics.NumericalMetric(name="val_liver_loss")
-    # spleen: 1
-    train_metrics[MetricKeys.SPLEEN] = metrics.BinaryMetrics(name="train_spleen")
-    val_metrics[MetricKeys.SPLEEN] = metrics.BinaryMetrics(name="val_spleen")
-    train_metrics[MetricKeys.SPLEEN_LOSS] = metrics.NumericalMetric(name="train_spleen_loss")
-    val_metrics[MetricKeys.SPLEEN_LOSS] = metrics.NumericalMetric(name="val_spleen_loss")
-    # kidney: 2
-    train_metrics[MetricKeys.KIDNEY] = metrics.BinaryMetrics(name="train_kidney")
-    val_metrics[MetricKeys.KIDNEY] = metrics.BinaryMetrics(name="val_kidney")
-    train_metrics[MetricKeys.KIDNEY_LOSS] = metrics.NumericalMetric(name="train_kidney_loss")
-    val_metrics[MetricKeys.KIDNEY_LOSS] = metrics.NumericalMetric(name="val_kidney_loss")
-    # bowel: 3
-    train_metrics[MetricKeys.BOWEL] = metrics.BinaryMetrics(name="train_bowel")
-    val_metrics[MetricKeys.BOWEL] = metrics.BinaryMetrics(name="val_bowel")
-    train_metrics[MetricKeys.BOWEL_LOSS] = metrics.NumericalMetric(name="train_bowel_loss")
-    val_metrics[MetricKeys.BOWEL_LOSS] = metrics.NumericalMetric(name="val_bowel_loss")
-    # general loss
-    train_metrics[MetricKeys.LOSS] = metrics.NumericalMetric(name="train_loss")
-    val_metrics[MetricKeys.LOSS] = metrics.NumericalMetric(name="val_loss")
+    create_metrics()
 
     # Compile
     single_training_step_compile = torch.compile(single_training_step)

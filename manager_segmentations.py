@@ -65,6 +65,19 @@ def get_patients_with_TSM_segmentation(only_negative_slope=False) -> list[str]:
     patient_ids = list(series_meta.loc[TSM_segmentation_series_id, "patient_id"].unique())
     return [str(x) for x in patient_ids]
 
+def restrict_patients_to_expert_segmentation(patients: list[str]) -> list[str]:
+    patients_with_segmentations = get_patients_with_expert_segmentation()
+    return [x for x in patients if str(x) in patients_with_segmentations]
+
+def restrict_patients_to_TSM_segmentation(patients: list[str]) -> list[str]:
+    patients_with_segmentations = get_patients_with_TSM_segmentation()
+    return [x for x in patients if str(x) in patients_with_segmentations]
+
+def restrict_patients_to_TSM_but_no_expert_segmentation(patients: list[str]) -> list[str]:
+    patients_with_TSM_segmentations = get_patients_with_TSM_segmentation()
+    patients_with_expert_segmentations = get_patients_with_expert_segmentation()
+    return [x for x in patients if str(x) in patients_with_TSM_segmentations and str(x) not in patients_with_expert_segmentations]
+
 patient_injuries: pd.DataFrame=None
 slice_level_injuries: pd.DataFrame=None
 def get_segmentation_injury_labels(patient_id: str, series_id: str, expert_segmentation: bool) -> np.ndarray:

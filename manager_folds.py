@@ -86,6 +86,24 @@ def get_liver_status(patient_ids: list[int]) -> pd.DataFrame:
 def get_spleen_status(patient_ids: list[int]) -> pd.DataFrame:
     return patient_injuries[["spleen_healthy", "spleen_low", "spleen_high"]].loc[patient_ids]
 
+def get_bowel_status_single(patient_id: int) -> int:
+    return int(patient_injuries["bowel_injury"].loc[patient_id])
+
+def get_extravasation_status_single(patient_id: int) -> int:
+    return int(patient_injuries["extravasation_injury"].loc[patient_id])
+
+def get_kidney_status_single(patient_id: int) -> np.ndarray:
+    return patient_injuries[["kidney_healthy", "kidney_low", "kidney_high"]].loc[patient_id].values
+
+def get_liver_status_single(patient_id: int) -> np.ndarray:
+    return patient_injuries[["liver_healthy", "liver_low", "liver_high"]].loc[patient_id].values
+
+def get_spleen_status_single(patient_id: int) -> np.ndarray:
+    return patient_injuries[["spleen_healthy", "spleen_low", "spleen_high"]].loc[patient_id].values
+
+def has_injury(patient_id: int) -> bool:
+    return int(patient_injuries.loc[patient_id, "any_injury"]) == 1
+
 def get_kidney_status_binary(patient_ids: list[int]) -> pd.Series:
     return patient_injuries["kidney_low"].loc[patient_ids] + patient_injuries["kidney_high"].loc[patient_ids]
 

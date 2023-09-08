@@ -772,14 +772,26 @@ class UnionProbaReductionHead(torch.nn.Module):
             if self.classification_levels[k] == 1:
                 outputs.append(1 - torch.prod(1 - torch.sigmoid(x[k]), dim=0))
             else:
-                
-                outputs.append(torch.softmax(torch.mean(x[k], dim=0), dim=0))
+                slice_probas = torch.softmax(x[k], dim=1)
+                slice_conditional_probas = torch.softmax(x[k][1:], dim=1)
+
+                all_negative = torch.prod(slice_probas[:, 0], dim=0) # probability that all slices are negative
+
+                # weighted sum
+                per_slice_positive = 1 - slice_probas[:, 0]
+                conditional_class_probas = ((torch.sum(slice_conditional_probas * per_slice_positive.unsqueeze(1), dim=0)
+                                                + torch.full((2,), 5e-5, device=per_slice_positive.device)) /
+                                            torch.sum(per_slice_positive, dim=0) + 1e-4)
+
+                outputs.append(torch.cat([all_negative.unsqueeze(0), (1 - all_negative) * conditional_class_probas], dim=0))
+
         return outputs
 
 class SupervisedAttentionClassifier(torch.nn.Module):
     def __init__(self, backbone: torch.nn.Module, backbone_out_channels: int, conv_hidden_channels: int,
                  classification_levels: list[int], reduction="mean"):
         super(SupervisedAttentionClassifier, self).__init__()
+        assert reduction in ["mean", "union"], "The reduction must be either mean or union"
 
         self.backbone = backbone
         self.backbone_out_channels = backbone_out_channels
@@ -787,19 +799,22 @@ class SupervisedAttentionClassifier(torch.nn.Module):
 
         self.attention_layer = SupervisedAttentionLinearLayer(backbone_out_channels, conv_hidden_channels)
         self.classifier_neck = ClassifierNeck(conv_hidden_channels, classification_levels)
+        self.proba_reduction_head = UnionProbaReductionHead(classification_levels) if reduction == "union" else MeanProbaReductionHead(classification_levels)
 
     def forward(self, x):
         x = self.backbone(x)
         x, roi_logits = self.attention_layer(x)
-        x = self.classifier_neck(x)
+        per_slice_logits = self.classifier_neck(x)
+        pred_probas = self.proba_reduction_head(per_slice_logits)
 
-        return x, roi_logits
+        return pred_probas, per_slice_logits, roi_logits
 
 class SupervisedAttentionClassifier3D(torch.nn.Module):
     def __init__(self, backbone: torch.nn.Module, backbone_first_channels:int, backbone_mid_channels:int, backbone_last_channels:int,
                        backbone_feature_width:int, backbone_feature_height:int, conv_hidden_channels: int,
-                 classification_levels: list[int]):
+                       classification_levels: list[int], reduction="mean"):
         super(SupervisedAttentionClassifier3D, self).__init__()
+        assert reduction in ["mean", "union"], "The reduction must be either mean or union"
 
         self.backbone = backbone
 
@@ -807,11 +822,13 @@ class SupervisedAttentionClassifier3D(torch.nn.Module):
                                                  backbone_feature_width, backbone_feature_height)
         self.attention_layer = SupervisedAttentionLinearLayer3D(backbone_first_channels * 16, conv_hidden_channels)
         self.classifier_neck = ClassifierNeck(conv_hidden_channels, classification_levels)
+        self.proba_reduction_head = UnionProbaReductionHead(classification_levels) if reduction == "union" else MeanProbaReductionHead(classification_levels)
 
     def forward(self, x):
         x = self.backbone(x)
         x = self.ushaped_neck(x)
         x, roi_logits = self.attention_layer(x)
-        x = self.classifier_neck(x)
+        per_slice_logits = self.classifier_neck(x)
+        pred_probas = self.proba_reduction_head(per_slice_logits)
 
-        return x, roi_logits
+        return pred_probas, per_slice_logits, roi_logits
