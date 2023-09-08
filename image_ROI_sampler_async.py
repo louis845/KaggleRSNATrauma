@@ -12,6 +12,7 @@ import gc
 import config
 import image_ROI_sampler
 import image_sampler_augmentations
+import manager_segmentations
 
 def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.Value,
                              max_slice_region_depth: int, max_image_width: int, max_image_height: int,
@@ -252,12 +253,15 @@ def load_image(patient_id: str,
                segmentation_region_depth = 1,
                slices_random=False,
                translate_rotate_augmentation=False,
-               elastic_augmentation=False) -> (torch.Tensor, torch.Tensor):
+               elastic_augmentation=False,
+               injury_labels_depth = -1) -> (torch.Tensor, torch.Tensor):
     if segmentation_folder is None:
         segmentation_region_depth = -1
     global slice_region_depth, loader_workers, num_loader_workers
-    assert segmentation_region_depth % 2 == 1, "segmentation_region_width must be odd"
-    assert segmentation_region_depth <= slice_region_depth, "segmentation_region_width must be less than or equal to slice_region_width"
+    assert segmentation_region_depth % 2 == 1, "segmentation_region_depth must be odd"
+    assert segmentation_region_depth <= slice_region_depth, "segmentation_region_depth must be less than or equal to slice_region_depth"
+    assert injury_labels_depth % 2 == 1, "injury_labels_depth must be odd"
+    assert injury_labels_depth <= slice_region_depth, "injury_labels_depth must be less than or equal to slice_region_depth"
     slice_region_radius = (slice_region_depth - 1) // 2
 
     # get slope and slice stride corresponding to 0.5cm
@@ -425,11 +429,36 @@ def load_image(patient_id: str,
             if segmentation_region_depth != -1:
                 segmentations = torch.nn.functional.pad(segmentations, (left, right, top, bottom))
 
-        # downscale segmentations by 32 with max pooling
         if segmentation_region_depth != -1:
+            # downscale segmentations by 32 with max pooling
             if segmentation_region_depth == 1:
                 segmentations = torch.nn.functional.max_pool2d(segmentations, kernel_size=32, stride=32)
             else:
                 segmentations = torch.nn.functional.max_pool2d(segmentations.view(slices, 4 * segmentation_region_depth, 512, 576),
                                                     kernel_size=32, stride=32).view(slices, 4, segmentation_region_depth, 16, 18)
-    return image, segmentations
+
+        if injury_labels_depth == -1:
+            injury_labels = None
+        else:
+            injury_labels_file = os.path.join(manager_segmentations.SEGMENTATION_LABELS_FOLDER, str(series_id) + ".npy")
+            injury_labels = np.load(injury_labels_file)
+
+            if injury_labels_depth > 1:
+                injury_labels = injury_labels[np.expand_dims(slice_poses, dim=-1) + np.expand_dims(slice_span, dim=0), :]
+                injury_labels_radius = (injury_labels_depth - 1) // 2
+                if contracted:
+                    assert loaded_temp_depth % 2 == 1 # This is always odd, look at the code above
+                    loaded_temp_depth_radius = (loaded_temp_depth - 1) // 2
+
+                    contraction_ratio = float(loaded_temp_depth) / slice_region_depth
+                    injury_labels_radius = min(max(int(injury_labels_radius * contraction_ratio), 1), loaded_temp_depth_radius)
+
+                    injury_labels = injury_labels[:, loaded_temp_depth_radius - injury_labels_radius:loaded_temp_depth_radius + injury_labels_radius + 1, :]
+                else:
+                    injury_labels = injury_labels[:, slice_region_radius - injury_labels_radius:slice_region_radius + injury_labels_radius + 1, :]
+
+                injury_labels = np.min(injury_labels, axis=1) # conservative localization, we require all slices in the vicinity to be positive
+            else:
+                injury_labels = injury_labels[slice_poses, :]
+
+    return image, segmentations, injury_labels
