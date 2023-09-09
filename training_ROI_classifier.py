@@ -387,7 +387,7 @@ def training_step(record: bool):
                         organ_injury_key = MetricKeys.get_injury_metric_key_by_class_code(class_code, MetricKeys.METRIC_TYPE_INJURY)
                         organ_slice_injury_key = MetricKeys.get_injury_metric_key_by_class_code(class_code, MetricKeys.METRIC_TYPE_SLICE_INJURY)
 
-                        train_metrics[organ_loss_key].add(class_losses[class_code].item(), 1)
+                        train_metrics[organ_loss_key].add(class_losses[class_code], 1)
                         train_metrics[organ_injury_key].add(pred_classes[class_code], torch.max(per_slice_class_labels[class_code], dim=0, keepdim=True)[0])
                         train_metrics[organ_slice_injury_key].add(per_slice_pred_classes[class_code], per_slice_class_labels[class_code])
                     train_metrics[MetricKeys.INJURY_LOSS].add(loss, 1)
@@ -556,7 +556,7 @@ def validation_step():
                     organ_slice_injury_key = MetricKeys.get_injury_metric_key_by_class_code(class_code,
                                                                                             MetricKeys.METRIC_TYPE_SLICE_INJURY)
 
-                    val_metrics[organ_loss_key].add(class_losses[class_code].item(), 1)
+                    val_metrics[organ_loss_key].add(class_losses[class_code], 1)
                     val_metrics[organ_injury_key].add(pred_classes[class_code], torch.max(per_slice_class_labels[class_code], dim=0, keepdim=True)[0])
                     val_metrics[organ_slice_injury_key].add(per_slice_pred_classes[class_code], per_slice_class_labels[class_code])
                 val_metrics[MetricKeys.INJURY_LOSS].add(loss, 1)
