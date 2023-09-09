@@ -520,7 +520,7 @@ def validation_step():
                 df_injury_labels = []
                 for k in range(4):
                     is_ternary = UsedLabelManager.is_ternary(k)
-                    df_injury_labels.append(torch.tensor(manager_folds.get_patient_status_single(int(patient_id), k, is_ternary=is_ternary), dtype=torch.long, device=config.device))
+                    df_injury_labels.append(torch.tensor([manager_folds.get_patient_status_single(int(patient_id), k, is_ternary=is_ternary)], dtype=torch.long, device=config.device))
 
                 # evaluate now
                 segmentation_metrics, injury_info = single_validation_step(model, slices,
