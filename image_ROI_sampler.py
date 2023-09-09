@@ -243,7 +243,7 @@ def load_image(patient_id: str,
             injury_labels = np.load(injury_labels_file)
 
             if injury_labels_depth > 1:
-                injury_labels = injury_labels[np.expand_dims(slice_poses, dim=-1) + np.expand_dims(slice_span, dim=0), :]
+                injury_labels = injury_labels[np.expand_dims(slice_poses, axis=-1) + np.expand_dims(slice_span, axis=0), :]
                 injury_labels_radius = (injury_labels_depth - 1) // 2
                 if contracted:
                     assert loaded_temp_depth % 2 == 1 # This is always odd, look at the code above
