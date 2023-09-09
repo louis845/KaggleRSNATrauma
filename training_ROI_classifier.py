@@ -127,6 +127,12 @@ class UsedLabelManager:
     def get_kidney_level():
         return UsedLabelManager.levels_used[2]
 
+    @staticmethod
+    def is_ternary(class_code: int):
+        if class_code == 3: # bowel is always binary
+            return False
+        return UsedLabelManager.levels_used[class_code] == 2
+
 
 class TrainingTypes:
     SEGMENTATIONS = 0
@@ -167,7 +173,13 @@ def initialize_training_entries(training_entries: list[int], validation_entries:
         training_entries = training_shuffle_utils.MultipleBiasedShuffleInfo(injury_training_list, [segmentation_training_list],
                                                          extra_ratio=1.0, within_extra_ratios=[1.0])
 
-    return training_entries, validation_entries
+    validation_expert_entries = manager_segmentations.restrict_patients_to_expert_segmentation(validation_entries)
+    validation_remaining_entries = [entry for entry in validation_entries if entry not in validation_expert_entries]
+
+    assert len(validation_expert_entries) + len(validation_remaining_entries) == len(validation_entries)
+    assert len(validation_expert_entries) >= 10, "Not enough expert validation entries."
+
+    return training_entries, (validation_expert_entries, validation_remaining_entries)
 
 
 
@@ -186,21 +198,33 @@ def focal_loss_segmentation(output: torch.Tensor, target: torch.Tensor, reduce_c
     else:
         return torch.mean(((target - torch.sigmoid(output)) ** 2) * binary_ce, dim=tensor_2d3d)
 
-def focal_loss_slicepreds(preds: torch.Tensor, target: torch.Tensor):
+def binary_focal_loss_slicepreds(preds: torch.Tensor, target: torch.Tensor):
+    # logsumexp trick for numerical stability
+    target_float = target.to(torch.float32)
+    binary_ce = torch.nn.functional.binary_cross_entropy_with_logits(preds, target_float, reduction="none")
+    return torch.mean(((target_float - torch.sigmoid(preds)) ** 2) * binary_ce)
 
+def ternary_focal_loss_slicepreds(preds: torch.Tensor, target: torch.Tensor):
+    # logsumexp trick for numerical stability
+    target_one_hot = torch.nn.functional.one_hot(target, num_classes=3).to(torch.float32)
+    ce = torch.nn.functional.cross_entropy(preds, target, reduction="none")
+    probas = torch.softmax(preds, dim=1)
+    focus = torch.sum((probas - target_one_hot) ** 2, dim=1)
+    assert focus.shape == ce.shape
+    return torch.mean(focus * ce)
 
 
 def single_training_step_segmentation(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
                          slices_: torch.Tensor, segmentations_: torch.Tensor, is_expert: bool):
     optimizer_.zero_grad()
-    pred_segmentations = model_(slices_)
+    pred_probas, per_slice_logits, pred_segmentations = model_(slices_)
     with torch.no_grad():
         preds = (pred_segmentations > 0).to(torch.float32)
     # we include the bowel only for expert segmentations, and penalize non-expert segmentations only half as much
     loss = focal_loss_segmentation(pred_segmentations, segmentations_, reduce_channels=True, include_bowel=is_expert)
     if not is_expert:
         loss = loss * 0.5
-    loss.backward()
+    (loss * 0.0625).backward()
     optimizer.step()
 
     with torch.no_grad():
@@ -214,11 +238,50 @@ def single_training_step_segmentation(model_: torch.nn.Module, optimizer_: torch
         fp_per_class = torch.sum(fp_pixels, dim=tensor_2d3d)
         fn_per_class = torch.sum(fn_pixels, dim=tensor_2d3d)
 
-        loss_per_class = focal_loss(pred_segmentations, segmentations_, reduce_channels=False)
+        loss_per_class = focal_loss_segmentation(pred_segmentations, segmentations_, reduce_channels=False)
 
     return loss, tp_per_class, tn_per_class, fp_per_class, fn_per_class, loss_per_class
 
-def training_segmentation()
+def single_training_step_injury(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
+                            slices: torch.Tensor, injury_labels: list[torch.Tensor], deep_guidance: bool):
+    optimizer_.zero_grad()
+    pred_probas, per_slice_logits, pred_segmentations = model_(slices)
+    loss = 0
+    deep_class_losses = []
+    class_losses = []
+    for k in range(4):
+        is_ternary = UsedLabelManager.is_ternary(k)
+        if deep_guidance:
+            if is_ternary:
+                class_loss = ternary_focal_loss_slicepreds(per_slice_logits[k], injury_labels[k])
+            else:
+                class_loss = binary_focal_loss_slicepreds(per_slice_logits[k], injury_labels[k].unsqueeze(-1))
+            loss += (class_loss * 0.25)
+            deep_class_losses.append(class_loss.item())
+
+        if is_ternary:
+            class_loss = torch.nn.functional.nll_loss(torch.log(torch.clamp(pred_probas[k], min=1e-10)), torch.max(injury_labels[k], dim=0, keepdim=True), reduction="mean")
+        else:
+            class_loss = torch.nn.functional.binary_cross_entropy(pred_probas[k], torch.max(injury_labels[k], dim=0, keepdim=True).unsqueeze(0), reduction="mean")
+        loss += class_loss
+        class_losses.append(class_loss.item())
+
+    loss.backward()
+    optimizer_.step()
+
+    pred_classes = []
+    per_slice_pred_classes = []
+    with torch.no_grad():
+        for k in range(4):
+            is_ternary = UsedLabelManager.is_ternary(k)
+            if is_ternary:
+                pred_classes.append(torch.argmax(pred_probas[k], dim=1))
+                per_slice_pred_classes.append(torch.argmax(per_slice_logits[k], dim=1))
+            else:
+                pred_classes.append((pred_probas[k] > 0.5).squeeze(-1).to(torch.long))
+                per_slice_pred_classes.append((per_slice_logits[k] > 0).squeeze(-1).to(torch.long))
+
+    return loss, deep_class_losses, class_losses, pred_classes, per_slice_pred_classes
 
 def training_step(record: bool):
     if record:
@@ -248,7 +311,7 @@ def training_step(record: bool):
                     is_expert = False
                     seg_folder = manager_segmentations.TSM_SEGMENTATION_FOLDER
                     injury_labels_depth = -1
-            elif training_type == TrainingTypes.INJURIES:
+            elif training_type == TrainingTypes.INJURIES or training_type == TrainingTypes.INJURIES_WITH_GUIDANCE:
                 any_injury = manager_folds.has_injury(patient_id)
                 series_id = str(manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0])
                 seg_folder = None
@@ -257,6 +320,7 @@ def training_step(record: bool):
                 else:
                     injury_labels_depth = -1
 
+            # sample now
             if use_async_sampler:
                 slices, segmentations, injury_labels = image_ROI_sampler_async.load_image(patient_id, series_id,
                                                                            segmentation_folder=seg_folder,
@@ -279,7 +343,7 @@ def training_step(record: bool):
             # do training now
             if training_type == TrainingTypes.SEGMENTATIONS:
                 loss, tp_per_class, tn_per_class, fp_per_class, \
-                    fn_per_class, loss_per_class = single_training_step_compile(model, optimizer, slices, segmentations,
+                    fn_per_class, loss_per_class = single_training_step_segmentation(model, optimizer, slices, segmentations,
                                                                                 is_expert=is_expert)
                 loss = loss.item()
                 tp_per_class = tp_per_class.cpu().numpy()
@@ -294,14 +358,39 @@ def training_step(record: bool):
                     for class_code in range(4):
                         if class_code == 3 and not is_expert:
                             continue
-                        organ_loss_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=True)
-                        organ_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=False)
+                        organ_loss_key = MetricKeys.get_segmentation_metric_key_by_class_code(class_code, is_loss=True)
+                        organ_key = MetricKeys.get_segmentation_metric_key_by_class_code(class_code, is_loss=False)
                         train_metrics[organ_loss_key].add(loss_per_class[class_code], 1)
                         train_metrics[organ_key].add_direct(tp_per_class[class_code], tn_per_class[class_code],
                                                             fp_per_class[class_code], fn_per_class[class_code])
                     train_metrics[MetricKeys.LOSS].add(loss, 1)
             elif (training_type == TrainingTypes.INJURIES or training_type == TrainingTypes.INJURIES_WITH_GUIDANCE):
+                if not any_injury:
+                    injury_labels = np.zeros((slices, 5), dtype=np.uint8)
 
+                per_slice_class_labels = []
+                for k in range(4):
+                    if UsedLabelManager.is_ternary(k):
+                        labels = torch.tensor(injury_labels[:, k], dtype=torch.long, device=config.device)
+                    else:
+                        labels = torch.tensor((injury_labels[:, k] > 0), dtype=torch.long, device=config.device)
+                    per_slice_class_labels.append(labels)
+                loss, deep_class_losses, class_losses, pred_classes, per_slice_pred_classes = single_training_step_injury(model, optimizer, slices, per_slice_class_labels,
+                                                                                                                          deep_guidance=(training_type == TrainingTypes.INJURIES_WITH_GUIDANCE))
+                loss = loss.item()
+
+                # record
+                if record:
+                    # compute metrics
+                    for class_code in range(4):
+                        organ_loss_key = MetricKeys.get_injury_metric_key_by_class_code(class_code, MetricKeys.METRIC_TYPE_LOSS)
+                        organ_injury_key = MetricKeys.get_injury_metric_key_by_class_code(class_code, MetricKeys.METRIC_TYPE_INJURY)
+                        organ_slice_injury_key = MetricKeys.get_injury_metric_key_by_class_code(class_code, MetricKeys.METRIC_TYPE_SLICE_INJURY)
+
+                        train_metrics[organ_loss_key].add(class_losses[class_code].item(), 1)
+                        train_metrics[organ_injury_key].add(pred_classes[class_code], torch.max(per_slice_class_labels[class_code], dim=0, keepdim=True))
+                        train_metrics[organ_slice_injury_key].add(per_slice_pred_classes[class_code], per_slice_class_labels[class_code])
+                    train_metrics[MetricKeys.INJURY_LOSS].add(loss, 1)
 
             trained += 1
             pbar.update(1)
@@ -316,77 +405,162 @@ def training_step(record: bool):
 
 def single_validation_step(model_: torch.nn.Module,
                            slices_: torch.Tensor,
-                           segmentations_: torch.Tensor):
-    pred_segmentations = model_(slices_)
+                           segmentations_: torch.Tensor, has_segmentations: bool,
+                           slice_injury_labels: list[torch.Tensor], df_injury_labels: list[torch.Tensor]):
+    pred_probas, per_slice_logits, pred_segmentations = model_(slices_)
+    # compute metrics for segmentations
     preds = (pred_segmentations > 0).to(torch.float32)
-    loss = focal_loss(pred_segmentations, segmentations_, reduce_channels=True)
+    if has_segmentations:
+        loss = focal_loss_segmentation(pred_segmentations, segmentations_, reduce_channels=True)
 
-    tp_pixels = (preds * segmentations_).to(torch.long)
-    tn_pixels = ((1 - preds) * (1 - segmentations_)).to(torch.long)
-    fp_pixels = (preds * (1 - segmentations_)).to(torch.long)
-    fn_pixels = ((1 - preds) * segmentations_).to(torch.long)
+        tp_pixels = (preds * segmentations_).to(torch.long)
+        tn_pixels = ((1 - preds) * (1 - segmentations_)).to(torch.long)
+        fp_pixels = (preds * (1 - segmentations_)).to(torch.long)
+        fn_pixels = ((1 - preds) * segmentations_).to(torch.long)
 
-    tp_per_class = torch.sum(tp_pixels, dim=tensor_2d3d)
-    tn_per_class = torch.sum(tn_pixels, dim=tensor_2d3d)
-    fp_per_class = torch.sum(fp_pixels, dim=tensor_2d3d)
-    fn_per_class = torch.sum(fn_pixels, dim=tensor_2d3d)
+        tp_per_class = torch.sum(tp_pixels, dim=tensor_2d3d)
+        tn_per_class = torch.sum(tn_pixels, dim=tensor_2d3d)
+        fp_per_class = torch.sum(fp_pixels, dim=tensor_2d3d)
+        fn_per_class = torch.sum(fn_pixels, dim=tensor_2d3d)
 
-    loss_per_class = focal_loss(pred_segmentations, segmentations_, reduce_channels=False)
+        loss_per_class = focal_loss_segmentation(pred_segmentations, segmentations_, reduce_channels=False)
+    else:
+        loss = None
+        tp_per_class, tn_per_class, fp_per_class, fn_per_class = None, None, None, None
+        loss_per_class = None
+    segmentation_metrics = (loss, tp_per_class, tn_per_class, fp_per_class, fn_per_class, loss_per_class)
+    # compute metrics for injuries
+    deep_class_losses, class_losses, pred_classes, per_slice_pred_classes = [], [], [], []
+    loss = 0
+    for k in range(4):
+        is_ternary = UsedLabelManager.is_ternary(k)
+        if is_ternary:
+            class_loss = ternary_focal_loss_slicepreds(per_slice_logits[k], slice_injury_labels[k])
+        else:
+            class_loss = binary_focal_loss_slicepreds(per_slice_logits[k], slice_injury_labels[k].unsqueeze(-1))
+        loss += (class_loss * 0.25)
+        deep_class_losses.append(class_loss.item())
 
-    return loss, tp_per_class, tn_per_class, fp_per_class, fn_per_class, loss_per_class
+        if is_ternary:
+            class_loss = torch.nn.functional.nll_loss(torch.log(torch.clamp(pred_probas[k], min=1e-10)), df_injury_labels[k], reduction="mean")
+        else:
+            class_loss = torch.nn.functional.binary_cross_entropy(pred_probas[k], df_injury_labels[k].unsqueeze(-1), reduction="mean")
+        loss += class_loss
+        class_losses.append(class_loss.item())
+
+        is_ternary = UsedLabelManager.is_ternary(k)
+        if is_ternary:
+            pred_classes.append(torch.argmax(pred_probas[k], dim=1))
+            per_slice_pred_classes.append(torch.argmax(per_slice_logits[k], dim=1))
+        else:
+            pred_classes.append((pred_probas[k] > 0.5).squeeze(-1).to(torch.long))
+            per_slice_pred_classes.append((per_slice_logits[k] > 0).squeeze(-1).to(torch.long))
+
+
+    return segmentation_metrics, (loss, deep_class_losses, class_losses, pred_classes, per_slice_pred_classes)
 
 def validation_step():
     for key in val_metrics:
         val_metrics[key].reset()
 
     # training
-    validated = 0
-    with tqdm.tqdm(total=len(validation_entries)) as pbar:
-        while validated < len(validation_entries):
+    with tqdm.tqdm(total=len(validation_entries[0]) + len(validation_entries[1])) as pbar:
+        validation_expert_entries = validation_entries[0]
+        validation_remaning_entries = validation_entries[1]
+        for k in range(len(validation_expert_entries) + len(validation_remaning_entries)):
             with torch.no_grad():
-                patient_id = validation_entries[validated]  # patient id
-                if manager_segmentations.patient_has_expert_segmentations(patient_id):
+                if k < len(validation_expert_entries):
+                    patient_id = validation_expert_entries[k]  # patient id
                     series_id = str(manager_segmentations.randomly_pick_expert_segmentation(patient_id))
                     seg_folder = manager_segmentations.EXPERT_SEGMENTATION_FOLDER
+                    validation_use_segmentations = True
                 else:
-                    series_id = str(manager_segmentations.randomly_pick_TSM_segmentation(patient_id))
-                    seg_folder = manager_segmentations.TSM_SEGMENTATION_FOLDER
+                    patient_id = validation_remaning_entries[k - len(validation_expert_entries)]
+                    series_id = str(manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0])
+                    seg_folder = -1
+                    validation_use_segmentations = False
+                any_injury = manager_folds.has_injury(patient_id)
+                if any_injury:
+                    injury_labels_depth = 5 if use_3d_prediction else 1
+                else:
+                    injury_labels_depth = -1
+
+                # sample now
                 if use_async_sampler:
-                    slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id,
-                                                                               segmentation_folder=seg_folder,
-                                                                               slices_random=False,
-                                                                               translate_rotate_augmentation=False,
-                                                                               elastic_augmentation=False,
-                                                                               slices=num_slices,
-                                                                               segmentation_region_depth=5 if use_3d_prediction else 1)
+                    slices, segmentations, injury_labels = image_ROI_sampler_async.load_image(patient_id, series_id,
+                                                                                              segmentation_folder=seg_folder,
+                                                                                              slices_random=not disable_random_slices,
+                                                                                              translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                                                              elastic_augmentation=not disable_elastic_augmentation,
+                                                                                              slices=num_slices,
+                                                                                              segmentation_region_depth=5 if use_3d_prediction else 1,
+                                                                                              injury_labels_depth=injury_labels_depth)
                 else:
-                    slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id,
-                                                                         segmentation_folder=seg_folder,
-                                                                         slices_random=False,
-                                                                         translate_rotate_augmentation=False,
-                                                                         elastic_augmentation=False,
-                                                                         slices=num_slices,
-                                                                         segmentation_region_depth=5 if use_3d_prediction else 1)
+                    slices, segmentations, injury_labels = image_ROI_sampler.load_image(patient_id, series_id,
+                                                                                        segmentation_folder=seg_folder,
+                                                                                        slices_random=not disable_random_slices,
+                                                                                        translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                                                        elastic_augmentation=not disable_elastic_augmentation,
+                                                                                        slices=num_slices,
+                                                                                        segmentation_region_depth=5 if use_3d_prediction else 1,
+                                                                                        injury_labels_depth=injury_labels_depth)
 
-                loss, tp_per_class, tn_per_class, fp_per_class, \
-                    fn_per_class, loss_per_class = single_validation_step(model, slices, segmentations)
+                # generate per slice labels
+                if not any_injury:
+                    injury_labels = np.zeros((slices, 5), dtype=np.uint8)
+                per_slice_class_labels = []
+                for k in range(4):
+                    if UsedLabelManager.is_ternary(k):
+                        labels = torch.tensor(injury_labels[:, k], dtype=torch.long, device=config.device)
+                    else:
+                        labels = torch.tensor((injury_labels[:, k] > 0), dtype=torch.long, device=config.device)
+                    per_slice_class_labels.append(labels)
+
+                # generate labels
+                df_injury_labels = []
+                for k in range(4):
+                    is_ternary = UsedLabelManager.is_ternary(k)
+                    df_injury_labels.append(torch.tensor(manager_folds.get_patient_status_single(int(patient_id), k, is_ternary=is_ternary), dtype=torch.long, device=config.device))
+
+                # evaluate now
+                segmentation_metrics, injury_info = single_validation_step(model, slices,
+                                                                          segmentations, has_segmentations=validation_use_segmentations,
+                                                                          slice_injury_labels=per_slice_class_labels, df_injury_labels=df_injury_labels)
+                if validation_use_segmentations:
+                    loss, tp_per_class, tn_per_class, fp_per_class, \
+                        fn_per_class, loss_per_class = segmentation_metrics
+                    loss = loss.item()
+                    tp_per_class = tp_per_class.cpu().numpy()
+                    tn_per_class = tn_per_class.cpu().numpy()
+                    fp_per_class = fp_per_class.cpu().numpy()
+                    fn_per_class = fn_per_class.cpu().numpy()
+                    loss_per_class = loss_per_class.cpu().numpy()
+
+                    # compute metrics
+                    for class_code in range(4):
+                        organ_loss_key = MetricKeys.get_segmentation_metric_key_by_class_code(class_code, is_loss=True)
+                        organ_key = MetricKeys.get_segmentation_metric_key_by_class_code(class_code, is_loss=False)
+                        val_metrics[organ_loss_key].add(loss_per_class[class_code], 1)
+                        val_metrics[organ_key].add_direct(tp_per_class[class_code], tn_per_class[class_code],
+                                                          fp_per_class[class_code], fn_per_class[class_code])
+                    val_metrics[MetricKeys.LOSS].add(loss, 1)
+
+                loss, deep_class_losses, class_losses, pred_classes, per_slice_pred_classes = injury_info
                 loss = loss.item()
-                tp_per_class = tp_per_class.cpu().numpy()
-                tn_per_class = tn_per_class.cpu().numpy()
-                fp_per_class = fp_per_class.cpu().numpy()
-                fn_per_class = fn_per_class.cpu().numpy()
-                loss_per_class = loss_per_class.cpu().numpy()
-
                 # compute metrics
                 for class_code in range(4):
-                    organ_loss_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=True)
-                    organ_key = MetricKeys.get_metric_key_by_class_code(class_code, is_loss=False)
-                    val_metrics[organ_loss_key].add(loss_per_class[class_code], 1)
-                    val_metrics[organ_key].add_direct(tp_per_class[class_code], tn_per_class[class_code],
-                                                      fp_per_class[class_code], fn_per_class[class_code])
-                val_metrics[MetricKeys.LOSS].add(loss, 1)
+                    organ_loss_key = MetricKeys.get_injury_metric_key_by_class_code(class_code,
+                                                                                    MetricKeys.METRIC_TYPE_LOSS)
+                    organ_injury_key = MetricKeys.get_injury_metric_key_by_class_code(class_code,
+                                                                                      MetricKeys.METRIC_TYPE_INJURY)
+                    organ_slice_injury_key = MetricKeys.get_injury_metric_key_by_class_code(class_code,
+                                                                                            MetricKeys.METRIC_TYPE_SLICE_INJURY)
 
-            validated += 1
+                    val_metrics[organ_loss_key].add(class_losses[class_code].item(), 1)
+                    val_metrics[organ_injury_key].add(pred_classes[class_code], torch.max(per_slice_class_labels[class_code], dim=0, keepdim=True))
+                    val_metrics[organ_slice_injury_key].add(per_slice_pred_classes[class_code], per_slice_class_labels[class_code])
+                val_metrics[MetricKeys.INJURY_LOSS].add(loss, 1)
+
             pbar.update(1)
 
     current_metrics = {}
@@ -682,7 +856,7 @@ if __name__ == "__main__":
     create_metrics()
 
     # Compile
-    single_training_step_compile = torch.compile(single_training_step)
+    #single_training_step_compile = torch.compile(single_training_step)
 
     # Initialize the async sampler if necessary
     if use_async_sampler:

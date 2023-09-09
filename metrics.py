@@ -47,9 +47,8 @@ class BinaryMetrics(Metrics):
 
     def add(self, y_pred: torch.Tensor, y_true: torch.Tensor):
         """
-        y_pred and y_true must be 1D tensors of the same shape. They contain binary values (0 or 1).
+        y_pred and y_true must be tensors of the same shape. They contain binary values (0 or 1).
         """
-        assert len(y_pred.shape) == 1 and len(y_true.shape) == 1, "y_pred and y_true must be 1D tensors"
         assert y_pred.shape == y_true.shape, "y_pred and y_true must have the same shape"
         assert y_pred.dtype == torch.long and y_true.dtype == torch.long, "y_pred and y_true must be long tensors"
         self.tp += torch.sum(y_pred * y_true).cpu().item()
@@ -97,7 +96,6 @@ class TernaryMetrics(Metrics):
         """
         y_pred and y_true must be 1D tensors of the same shape. They contain ternary values (0 to 2).
         """
-        assert len(y_pred.shape) == 1 and len(y_true.shape) == 1, "y_pred and y_true must be 1D tensors"
         assert y_pred.shape == y_true.shape, "y_pred and y_true must have the same shape"
         assert y_pred.dtype == torch.long and y_true.dtype == torch.long, "y_pred and y_true must be long tensors"
         self.tp += torch.sum((y_pred > 0) & (y_true > 0)).cpu().item()

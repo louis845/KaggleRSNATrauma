@@ -770,20 +770,19 @@ class UnionProbaReductionHead(torch.nn.Module):
         outputs = []
         for k in range(4):
             if self.classification_levels[k] == 1:
-                outputs.append(1 - torch.prod(1 - torch.sigmoid(x[k]), dim=0))
+                outputs.append(1 - torch.prod(1 - torch.sigmoid(x[k]), dim=0, keepdim=True))
             else:
                 slice_probas = torch.softmax(x[k], dim=1)
-                slice_conditional_probas = torch.softmax(x[k][1:], dim=1)
 
-                all_negative = torch.prod(slice_probas[:, 0], dim=0) # probability that all slices are negative
+                all_negative = torch.prod(slice_probas[:, 0], dim=0, keepdim=True) # probability that all slices are negative
 
                 # weighted sum
                 per_slice_positive = 1 - slice_probas[:, 0]
-                conditional_class_probas = ((torch.sum(slice_conditional_probas * per_slice_positive.unsqueeze(1), dim=0)
-                                                + torch.full((2,), 5e-5, device=per_slice_positive.device)) /
-                                            torch.sum(per_slice_positive, dim=0) + 1e-4)
+                conditional_class_probas = ((torch.sum(slice_probas[:, 1:], dim=0, keepdim=True)
+                                                + torch.full((1, 2), 5e-5, device=per_slice_positive.device)) /
+                                            (torch.sum(per_slice_positive, dim=0) + 1e-4))
 
-                outputs.append(torch.cat([all_negative.unsqueeze(0), (1 - all_negative) * conditional_class_probas], dim=0))
+                outputs.append(torch.cat([all_negative.unsqueeze(0), (1 - all_negative) * conditional_class_probas], dim=1))
 
         return outputs
 
