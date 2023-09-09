@@ -121,17 +121,21 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 # set flag false
                 image_required_flag.value = False
 
+                # check whether segmentation is required
+                has_segmentation = image_data["segmentation"] is not None
+
                 # place data into shared memory
                 image_data = buffered_images.pop(0)
                 img_d, img_h, img_w = image_data["image"].shape
                 image_shared_memory_array[:img_d, :img_h, :img_w] = image_data["image"].numpy()
-                seg_shared_memory_array[:, :img_d, :img_h, :img_w] = image_data["segmentation"].numpy()
+                if has_segmentation:
+                    seg_shared_memory_array[:, :img_d, :img_h, :img_w] = image_data["segmentation"].numpy()
 
                 # set value to pass to main process
                 loaded_image_depth.value = img_d
                 loaded_image_height.value = img_h
                 loaded_image_width.value = img_w
-                loaded_image_has_segmentations.value = (image_data["segmentation"] is not None)
+                loaded_image_has_segmentations.value = has_segmentation
 
                 # release lock
                 image_available_lock.release()
