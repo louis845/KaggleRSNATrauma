@@ -343,7 +343,7 @@ def training_step(record: bool):
             # do training now
             if training_type == TrainingTypes.SEGMENTATIONS:
                 loss, tp_per_class, tn_per_class, fp_per_class, \
-                    fn_per_class, loss_per_class = single_training_step_segmentation(model, optimizer, slices, segmentations,
+                    fn_per_class, loss_per_class = single_training_step_segmentation_compile(model, optimizer, slices, segmentations,
                                                                                 is_expert=is_expert)
                 loss = loss.item()
                 tp_per_class = tp_per_class.cpu().numpy()
@@ -375,7 +375,7 @@ def training_step(record: bool):
                     else:
                         labels = torch.tensor((injury_labels[:, k] > 0), dtype=torch.long, device=config.device)
                     per_slice_class_labels.append(labels)
-                loss, deep_class_losses, class_losses, pred_classes, per_slice_pred_classes = single_training_step_injury(model, optimizer, slices, per_slice_class_labels,
+                loss, deep_class_losses, class_losses, pred_classes, per_slice_pred_classes = single_training_step_injury_compile(model, optimizer, slices, per_slice_class_labels,
                                                                                                                           deep_guidance=(training_type == TrainingTypes.INJURIES_WITH_GUIDANCE))
                 loss = loss.item()
 
@@ -859,7 +859,8 @@ if __name__ == "__main__":
     create_metrics()
 
     # Compile
-    #single_training_step_compile = torch.compile(single_training_step)
+    single_training_step_segmentation_compile = torch.compile(single_training_step_segmentation)
+    single_training_step_injury_compile = torch.compile(single_training_step_injury)
 
     # Initialize the async sampler if necessary
     if use_async_sampler:
