@@ -644,6 +644,9 @@ def create_metrics():
     val_metrics[MetricKeys.BOWEL_SLICE_INJURY] = metrics.BinaryMetrics(name="val_bowel_slice_injury")
     train_metrics[MetricKeys.BOWEL_INJURY_LOSS] = metrics.NumericalMetric(name="train_bowel_injury_loss")
     val_metrics[MetricKeys.BOWEL_INJURY_LOSS] = metrics.NumericalMetric(name="val_bowel_injury_loss")
+    # general loss
+    train_metrics[MetricKeys.INJURY_LOSS] = metrics.NumericalMetric(name="train_injury_loss")
+    val_metrics[MetricKeys.INJURY_LOSS] = metrics.NumericalMetric(name="val_injury_loss")
 
 def print_history(metrics_history: collections.defaultdict[str, list]):
     for key in metrics_history:
