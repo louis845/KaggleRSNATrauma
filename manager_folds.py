@@ -298,3 +298,13 @@ if __name__ == "__main__":
             val_data = summary.iloc[val_idx].index
             save_dataset("ROI_classifier_fold{}_train".format(k), [int(patient_id) for patient_id in train_data])
             save_dataset("ROI_classifier_fold{}_val".format(k), [int(patient_id) for patient_id in val_data])
+
+    if not os.path.isfile("folds/ROI_classifier_fold0_expert_train.json"):
+        with_expert_segmentation = manager_segmentations.get_patients_with_expert_segmentation()
+        for k in range(3):
+            train_entries = load_dataset("ROI_classifier_fold{}_train".format(k))
+            val_entries = load_dataset("ROI_classifier_fold{}_val".format(k))
+            train_entries = [x for x in train_entries if str(x) in with_expert_segmentation]
+            val_entries = [x for x in val_entries if str(x) in with_expert_segmentation]
+            save_dataset("ROI_classifier_fold{}_expert_train".format(k), train_entries)
+            save_dataset("ROI_classifier_fold{}_expert_val".format(k), val_entries)
