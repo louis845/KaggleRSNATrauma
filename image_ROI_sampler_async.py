@@ -122,10 +122,10 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 image_required_flag.value = False
 
                 # check whether segmentation is required
+                image_data = buffered_images.pop(0)
                 has_segmentation = image_data["segmentation"] is not None
 
                 # place data into shared memory
-                image_data = buffered_images.pop(0)
                 img_d, img_h, img_w = image_data["image"].shape
                 image_shared_memory_array[:img_d, :img_h, :img_w] = image_data["image"].numpy()
                 if has_segmentation:
