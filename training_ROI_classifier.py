@@ -444,7 +444,7 @@ def single_validation_step(model_: torch.nn.Module,
         if is_ternary:
             class_loss = torch.nn.functional.nll_loss(torch.log(torch.clamp(pred_probas[k], min=1e-10)), df_injury_labels[k], reduction="mean")
         else:
-            class_loss = torch.nn.functional.binary_cross_entropy(pred_probas[k], df_injury_labels[k].unsqueeze(-1), reduction="mean")
+            class_loss = torch.nn.functional.binary_cross_entropy(pred_probas[k], df_injury_labels[k].unsqueeze(-1).to(torch.float32), reduction="mean")
         loss += class_loss
         class_losses.append(class_loss.item())
 
