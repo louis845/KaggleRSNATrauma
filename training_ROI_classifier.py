@@ -366,7 +366,7 @@ def training_step(record: bool):
                     train_metrics[MetricKeys.LOSS].add(loss, 1)
             elif (training_type == TrainingTypes.INJURIES or training_type == TrainingTypes.INJURIES_WITH_GUIDANCE):
                 if not any_injury:
-                    injury_labels = np.zeros((slices, 5), dtype=np.uint8)
+                    injury_labels = np.zeros((num_slices, 5), dtype=np.uint8)
 
                 per_slice_class_labels = []
                 for k in range(4):
@@ -507,7 +507,7 @@ def validation_step():
 
                 # generate per slice labels
                 if not any_injury:
-                    injury_labels = np.zeros((slices, 5), dtype=np.uint8)
+                    injury_labels = np.zeros((num_slices, 5), dtype=np.uint8)
                 per_slice_class_labels = []
                 for k in range(4):
                     if UsedLabelManager.is_ternary(k):
