@@ -101,6 +101,35 @@ def get_liver_status_single(patient_id: int) -> np.ndarray:
 def get_spleen_status_single(patient_id: int) -> np.ndarray:
     return patient_injuries[["spleen_healthy", "spleen_low", "spleen_high"]].loc[patient_id].values
 
+def get_patient_status_single(patient_id: int, class_code: int, is_ternary: bool) -> int:
+    """
+    Get the status of a patient for a specific class.
+    :param patient_id: The patient id
+    :param class_code: The class code. 0 - liver, 1 - spleen, 2 - kidney, 3 - bowel, 4 - extravasation
+    :param is_ternary: Whether to return a ternary or binary label. Ignored if bowel or extravasation, as they are binary
+    :return: The status of the patient for the class
+    """
+    if class_code == 0:
+        if is_ternary:
+            return int(patient_injuries.loc[patient_id, "liver_low"] + 2 * patient_injuries.loc[patient_id, "liver_high"])
+        else:
+            return 1 - int(patient_injuries.loc[patient_id, "liver_healthy"])
+    if class_code == 1:
+        if is_ternary:
+            return int(patient_injuries.loc[patient_id, "spleen_low"] + 2 * patient_injuries.loc[patient_id, "spleen_high"])
+        else:
+            return 1 - int(patient_injuries.loc[patient_id, "spleen_healthy"])
+    if class_code == 2:
+        if is_ternary:
+            return int(patient_injuries.loc[patient_id, "kidney_low"] + 2 * patient_injuries.loc[patient_id, "kidney_high"])
+        else:
+            return 1 - int(patient_injuries.loc[patient_id, "kidney_healthy"])
+    if class_code == 3:
+        return int(patient_injuries.loc[patient_id, "bowel_injury"])
+    if class_code == 4:
+        return int(patient_injuries.loc[patient_id, "extravasation_injury"])
+    raise ValueError("Invalid class code")
+
 def has_injury(patient_id: int) -> bool:
     return int(patient_injuries.loc[patient_id, "any_injury"]) == 1
 
@@ -248,3 +277,24 @@ if __name__ == "__main__":
             val_data = summary.iloc[val_idx].index
             save_dataset("segmentation_extra_fold{}_train".format(k), [int(patient_id) for patient_id in train_data] + patients_with_TSM_segmentation)
             save_dataset("segmentation_extra_fold{}_val".format(k), [int(patient_id) for patient_id in val_data])
+
+    if not os.path.isfile("folds/ROI_classifier_fold0_train.json"):
+        label_str, summary = get_summarization_string(
+            {"bowel": True, "extravasation": True, "kidney": True, "liver": True, "spleen": True})
+        # stratify by whether patient has expert segmentation also
+        with_expert_segmentation = manager_segmentations.get_patients_with_expert_segmentation()
+        has_segmentation_summary = []
+        for patient_id in summary.index:
+            if str(patient_id) in with_expert_segmentation:
+                has_segmentation_summary.append("_HasSegmentation")
+            else:
+                has_segmentation_summary.append("_NoSegmentation")
+        has_segmentation_summary = pd.Series(has_segmentation_summary, index=summary.index)
+        summary = summary + has_segmentation_summary
+
+        kfold = StratifiedKFold(n_splits=3, shuffle=True)
+        for k, (train_idx, val_idx) in enumerate(kfold.split(summary, summary)):
+            train_data = summary.iloc[train_idx].index
+            val_data = summary.iloc[val_idx].index
+            save_dataset("ROI_classifier_fold{}_train".format(k), [int(patient_id) for patient_id in train_data])
+            save_dataset("ROI_classifier_fold{}_val".format(k), [int(patient_id) for patient_id in val_data])
