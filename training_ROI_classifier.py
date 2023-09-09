@@ -262,7 +262,7 @@ def single_training_step_injury(model_: torch.nn.Module, optimizer_: torch.optim
         if is_ternary:
             class_loss = torch.nn.functional.nll_loss(torch.log(torch.clamp(pred_probas[k], min=1e-10)), torch.max(injury_labels[k], dim=0, keepdim=True)[0], reduction="mean")
         else:
-            class_loss = torch.nn.functional.binary_cross_entropy(pred_probas[k], torch.max(injury_labels[k], dim=0, keepdim=True)[0].unsqueeze(0), reduction="mean")
+            class_loss = torch.nn.functional.binary_cross_entropy(pred_probas[k], torch.max(injury_labels[k], dim=0, keepdim=True)[0].unsqueeze(0).to(torch.float32), reduction="mean")
         loss += class_loss
         class_losses.append(class_loss.item())
 
