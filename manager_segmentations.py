@@ -129,11 +129,11 @@ def get_segmentation_injury_labels(patient_id: str, series_id: str, expert_segme
     elif injury_summary["spleen_high"] == 1:
         injury_labels[:, 1] = 2 * torch.any((segmentations[..., 1] > 0) \
                                         .view(length, -1), dim=1).cpu().numpy().astype(dtype=np.uint8)
-    if injury_summary["kidney_low"] == 1:
-        injury_labels[:, 2] = torch.any((segmentations[..., 2] > 0) \
+    if injury_summary["kidney_low"] == 1: # in segmentation file, left and right kidney is saved as 2, 3. Combine them.
+        injury_labels[:, 2] = torch.any(torch.logical_or((segmentations[..., 2] > 0), (segmentations[..., 3] > 0)) \
                                         .view(length, -1), dim=1).cpu().numpy().astype(dtype=np.uint8)
-    elif injury_summary["kidney_high"] == 1:
-        injury_labels[:, 2] = 2 * torch.any((segmentations[..., 2] > 0) \
+    elif injury_summary["kidney_high"] == 1: # in segmentation file, left and right kidney is saved as 2, 3. Combine them.
+        injury_labels[:, 2] = 2 * torch.any(torch.logical_or((segmentations[..., 2] > 0), (segmentations[..., 3] > 0)) \
                                         .view(length, -1), dim=1).cpu().numpy().astype(dtype=np.uint8)
 
     for k in range(len(slice_level_injury_summary)):
