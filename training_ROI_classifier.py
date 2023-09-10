@@ -786,7 +786,7 @@ if __name__ == "__main__":
             .unsqueeze(0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
     else:
         model = model_3d_patch_resnet.SupervisedAttentionClassifier(backbone=backbone, backbone_out_channels=channel_progression[-1],
-                                                                    conv_hidden_channels=128, classification_levels=UsedLabelManager.levels_used + [1],
+                                                                    conv_hidden_channels=conv_hidden_channels, classification_levels=UsedLabelManager.levels_used + [1],
                                                                     reduction="union")
         tensor_2d3d = (0, 2, 3)
         bowel_mask_tensor = torch.tensor([1, 1, 1, 0], dtype=torch.float32, device=config.device) \
