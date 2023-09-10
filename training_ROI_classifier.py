@@ -671,6 +671,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs_per_save", type=int, default=2, help="Number of epochs between saves. Default 2.")
     parser.add_argument("--channel_progression", type=int, nargs="+", default=[2, 3, 6, 9, 15, 32, 128, 256, 512, 1024],
                         help="The channels for progression in ResNet backbone.")
+    parser.add_argument("--conv_hidden_channels", type=int, default=32, help="The number of hidden channels for the last conv layers. Default 32.")
     parser.add_argument("--hidden3d_blocks", type=int, nargs="+", default=[1, 2, 1, 0, 0, 0],
                         help="Number of hidden 3d blocks for ResNet backbone.")
     parser.add_argument("--hidden_blocks", type=int, nargs="+", default=[1, 2, 6, 8, 23, 8],
@@ -726,6 +727,7 @@ if __name__ == "__main__":
     optimizer_type = args.optimizer
     epochs_per_save = args.epochs_per_save
     channel_progression = args.channel_progression
+    conv_hidden_channels = args.conv_hidden_channels
     hidden3d_blocks = args.hidden3d_blocks
     hidden_blocks = args.hidden_blocks
     bottleneck_factor = args.bottleneck_factor
@@ -755,6 +757,7 @@ if __name__ == "__main__":
         assert type(k) == int, "3D Blocks must be a list of integers."
 
     print("Hidden channels: " + str(channel_progression))
+    print("Conv hidden channels: " + str(conv_hidden_channels))
     print("Hidden blocks: " + str(hidden_blocks))
     print("Hidden 3D blocks: " + str(hidden3d_blocks))
     print("Bottleneck factor: " + str(bottleneck_factor))
@@ -776,7 +779,7 @@ if __name__ == "__main__":
             channel_progression[-1]))
         model = model_3d_patch_resnet.SupervisedAttentionClassifier3D(backbone=backbone, backbone_first_channels=deep_channels[0],
                                                         backbone_mid_channels=deep_channels[1], backbone_last_channels=channel_progression[-1],
-                                                        backbone_feature_width=18, backbone_feature_height=16, conv_hidden_channels=128,
+                                                        backbone_feature_width=18, backbone_feature_height=16, conv_hidden_channels=conv_hidden_channels,
                                                         classification_levels=UsedLabelManager.levels_used + [1], reduction="union")
         tensor_2d3d = (0, 2, 3, 4)
         bowel_mask_tensor = torch.tensor([1, 1, 1, 0], dtype=torch.float32, device=config.device) \
