@@ -318,19 +318,30 @@ class RawCTViewer(QMainWindow):
                 self.fig.set_size_inches(image.shape[1] / 100, image.shape[0] / 100)
                 self.fig.add_subplot(1, 1, 1).imshow(image, cmap="gray")
             else:
-                ax_ct = self.fig.add_subplot(1, 3, 1)
+                ax_ct = self.fig.add_subplot(1, 4, 1)
                 ax_ct.imshow(image, cmap="gray")
 
                 seg_img = self.segmentation_image[slice_number - self.min_series, ...]
                 seg_img = cv2.cvtColor(seg_img, cv2.COLOR_HSV2RGB)
-                ax_seg = self.fig.add_subplot(1, 3, 2)
+                ax_seg = self.fig.add_subplot(1, 4, 2)
                 ax_seg.imshow(seg_img)
 
-                ax_overlay = self.fig.add_subplot(1, 3, 3)
+                ax_overlay = self.fig.add_subplot(1, 4, 3)
                 ax_overlay.imshow(image, cmap="gray")
                 ax_overlay.imshow(seg_img, alpha=0.5)
 
-                self.fig.set_size_inches(image.shape[1] / 100 * 3, image.shape[0] / 100)
+                ax_colors = self.fig.add_subplot(1, 4, 4)
+                color_image = np.zeros((self.segmentation_image.shape[0], self.segmentation_image.shape[1]), dtype=np.uint8)
+                color_image[:1 * self.segmentation_image.shape[0] // 5, :] = 1
+                color_image[1 * self.segmentation_image.shape[0] // 5:2 * self.segmentation_image.shape[0] // 5, :] = 2
+                color_image[2 * self.segmentation_image.shape[0] // 5:3 * self.segmentation_image.shape[0] // 5, :] = 3
+                color_image[3 * self.segmentation_image.shape[0] // 5:4 * self.segmentation_image.shape[0] // 5, :] = 4
+                color_image[4 * self.segmentation_image.shape[0] // 5:5 * self.segmentation_image.shape[0] // 5, :] = 5
+                color_image = convert_segmentation_to_color(color_image)
+                color_image = cv2.cvtColor(color_image, cv2.COLOR_HSV2RGB)
+                ax_colors.imshow(color_image)
+
+                self.fig.set_size_inches(image.shape[1] / 100 * 4, image.shape[0] / 100)
 
 
             self.image_canvas.draw()
