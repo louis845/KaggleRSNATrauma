@@ -1,5 +1,122 @@
 import torch
 
+class ResConv3DBlockPure(torch.nn.Module):
+    def __init__(self, in_channels, out_channels,
+                 downsample=False,
+                 bottleneck_factor=1,
+                 squeeze_excitation=False, squeeze_excitation_bottleneck_factor=4):
+        """
+        :param in_channels: number of input channels
+        :param out_channels: number of output channels
+        :param downsample: whether to downsample the input 2x2x2
+        :param bottleneck_factor: factor by which to reduce the number of channels in the bottleneck
+        :param squeeze_excitation: whether to use squeeze and excitation
+        :param squeeze_excitation_bottleneck_factor: factor by which to reduce the number of channels in the squeeze and excitation block
+        """
+        super(ResConv3DBlockPure, self).__init__()
+        assert in_channels <= out_channels
+        if bottleneck_factor > 1:
+            assert out_channels % bottleneck_factor == 0, "out_channels must be divisible by bottleneck_factor"
+            assert out_channels % (bottleneck_factor * 4) == 0, "out_channels must be divisible by bottleneck_factor * 4"
+        bottleneck_channels = out_channels // bottleneck_factor
+
+        self.avgpool = torch.nn.AvgPool3d(kernel_size=2, stride=2, padding=0)
+        if bottleneck_factor > 1:
+            self.conv1 = torch.nn.Conv3d(in_channels, bottleneck_channels, kernel_size=1, bias=False,
+                                         padding="same", padding_mode="replicate")
+            self.batchnorm1 = torch.nn.InstanceNorm3d(bottleneck_channels, affine=True)
+            self.nonlin1 = torch.nn.GELU()
+
+            num_groups = bottleneck_channels // 4
+            if downsample:
+                self.conv2 = torch.nn.Conv3d(bottleneck_channels, bottleneck_channels, kernel_size=3, stride=2,
+                                             bias=False, padding=0, groups=num_groups) # 3d conv
+            else:
+                self.conv2 = torch.nn.Conv3d(bottleneck_channels, bottleneck_channels, kernel_size=3, bias=False,
+                                             padding=1, padding_mode="replicate", groups=num_groups) # 3d conv
+            self.batchnorm2 = torch.nn.InstanceNorm3d(bottleneck_channels, affine=True)
+            self.nonlin2 = torch.nn.GELU()
+
+            self.conv3 = torch.nn.Conv3d(bottleneck_channels, out_channels, kernel_size=1, bias=False,
+                                         padding="same", padding_mode="replicate")
+            self.batchnorm3 = torch.nn.InstanceNorm3d(out_channels, affine=True)
+            self.nonlin3 = torch.nn.GELU()
+        else:
+            self.conv1 = torch.nn.Conv3d(in_channels, out_channels, kernel_size=3, bias=False,
+                                         padding="same", padding_mode="replicate") # depth preserving conv
+            self.batchnorm1 = torch.nn.InstanceNorm3d(out_channels, affine=True)
+            self.nonlin1 = torch.nn.GELU()
+
+            if downsample:
+                self.conv2 = torch.nn.Conv3d(out_channels, out_channels, kernel_size=3, stride=2,
+                                             bias=False, padding=0) # 3d conv
+            else:
+                self.conv2 = torch.nn.Conv3d(out_channels, out_channels, kernel_size=3, bias=False,
+                                             padding=1, padding_mode="replicate") # 3d conv
+            self.batchnorm2 = torch.nn.InstanceNorm3d(out_channels, affine=True)
+            self.nonlin2 = torch.nn.GELU()
+        if squeeze_excitation:
+            assert out_channels % squeeze_excitation_bottleneck_factor == 0, "out_channels must be divisible by squeeze_excitation_bottleneck_factor"
+            self.se_pool = torch.nn.AdaptiveAvgPool3d(1)
+            self.se_conv1 = torch.nn.Conv3d(out_channels, out_channels // squeeze_excitation_bottleneck_factor,
+                                            kernel_size=1, bias=True, padding="same", padding_mode="replicate")
+            self.se_relu = torch.nn.ReLU()
+            self.se_conv2 = torch.nn.Conv3d(out_channels // squeeze_excitation_bottleneck_factor, out_channels,
+                                            kernel_size=1, bias=True, padding="same", padding_mode="replicate")
+            self.se_sigmoid = torch.nn.Sigmoid()
+
+        self.bottleneck_factor = bottleneck_factor
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.downsample = downsample
+        self.squeeze_excitation = squeeze_excitation
+
+    def forward(self, x):
+        N, C, D, H, W = x.shape
+        assert C == self.in_channels
+
+        if self.in_channels < self.out_channels:
+            x_init = torch.nn.functional.pad(x, (
+            0, 0, 0, 0, 0, 0, 0, self.out_channels - self.in_channels), "constant", 0.0)
+        else:
+            x_init = x
+
+        x = self.conv1(x)
+        x = self.batchnorm1(x)
+        x = self.nonlin1(x)
+        assert x.shape == (N, self.out_channels // self.bottleneck_factor, D, H, W)
+
+        if self.downsample:
+            x = self.conv2(torch.nn.functional.pad(x, (1, 0, 1, 0, 1, 0), "reflect"))
+            assert x.shape == (N, self.out_channels // self.bottleneck_factor, D - 2, H // 2, W // 2)
+        else:
+            x = self.conv2(x)
+            assert x.shape == (N, self.out_channels // self.bottleneck_factor, D - 2, H, W)
+        x = self.batchnorm2(x)
+
+        if self.bottleneck_factor > 1:
+            x = self.nonlin2(x)
+
+            x = self.conv3(x)
+            x = self.batchnorm3(x)
+
+        if self.squeeze_excitation:
+            x_se = self.se_pool(x)
+            x_se = self.se_conv1(x_se)
+            x_se = self.se_relu(x_se)
+            x_se = self.se_conv2(x_se)
+            x_se = self.se_sigmoid(x_se)
+            x = x * x_se
+
+        if self.downsample:
+            x_init = self.avgpool(x_init)
+            assert x_init.shape == (N, self.out_channels, D // 2, H // 2, W // 2)
+        if self.bottleneck_factor > 1:
+            result = self.nonlin3(x_init + x)
+        else:
+            result = self.nonlin2(x_init + x)
+        return result
+
 class ResConv3DBlock(torch.nn.Module):
     def __init__(self, in_channels, out_channels,
                  downsample=False, depth_average=False,
