@@ -656,7 +656,7 @@ class LocalizedROINet(torch.nn.Module):
         return x
 
 class SupervisedAttentionLinearLayer(torch.nn.Module):
-    def __init__(self, in_channels: int, out_channels: int):
+    def __init__(self, in_channels: int, out_channels: int, return_reduced: bool=False):
         super(SupervisedAttentionLinearLayer, self).__init__()
 
         self.attention = torch.nn.Conv2d(in_channels, 4, kernel_size=1, bias=True)
@@ -665,6 +665,8 @@ class SupervisedAttentionLinearLayer(torch.nn.Module):
         self.mid_nonlin = torch.nn.GELU()
 
         self.mid_bias = torch.nn.Parameter(torch.zeros(4, out_channels), requires_grad=True)
+
+        self.return_reduced = return_reduced
 
     def forward(self, x):
         N, C, H, W = x.shape
@@ -675,10 +677,19 @@ class SupervisedAttentionLinearLayer(torch.nn.Module):
         x = self.midconv(x)
         x = self.mid_norm(x)
         x = self.mid_nonlin(x).view(N, 4, -1, H, W)
-        x = ((torch.sum(x * feature_attention.unsqueeze(2), dim=(-1, -2)) + self.mid_bias) /
-                torch.sum(feature_attention, dim=(-1, -2)).unsqueeze(2) + 1.0)
+        if self.return_reduced:
+            x_per_slice = ((torch.sum(x * feature_attention.unsqueeze(2), dim=(-1, -2)) + self.mid_bias) /
+                 torch.sum(feature_attention, dim=(-1, -2)).unsqueeze(2) + 1.0)
 
-        return x, roi_logits
+            x = ((torch.sum(x * feature_attention.unsqueeze(2), dim=(0, -1, -2)).unsqueeze(0) + self.mid_bias) /
+                 torch.sum(feature_attention, dim=(0, -1, -2)).unsqueeze(0).unsqueeze(2) + 1.0)
+
+            return x, x_per_slice, roi_logits
+        else:
+            x = ((torch.sum(x * feature_attention.unsqueeze(2), dim=(-1, -2)) + self.mid_bias) /
+                    torch.sum(feature_attention, dim=(-1, -2)).unsqueeze(2) + 1.0)
+
+            return x, roi_logits
 
 
 class ResConv2DDoubleDownsampleBlock(torch.nn.Module):
@@ -812,7 +823,7 @@ class NeighborhoodROILayer(torch.nn.Module):
         return x
 
 class SupervisedAttentionLinearLayer3D(torch.nn.Module):
-    def __init__(self, in_channels: int, out_channels: int):
+    def __init__(self, in_channels: int, out_channels: int, return_reduced: bool=False):
         super(SupervisedAttentionLinearLayer3D, self).__init__()
 
         self.attention = torch.nn.Conv3d(in_channels, 4, kernel_size=1, bias=True)
@@ -821,6 +832,8 @@ class SupervisedAttentionLinearLayer3D(torch.nn.Module):
         self.mid_nonlin = torch.nn.GELU()
 
         self.mid_bias = torch.nn.Parameter(torch.zeros(4, out_channels), requires_grad=True)
+
+        self.return_reduced = return_reduced
 
     def forward(self, x):
         N, C, D, H, W = x.shape
@@ -831,8 +844,16 @@ class SupervisedAttentionLinearLayer3D(torch.nn.Module):
         x = self.midconv(x)
         x = self.mid_norm(x)
         x = self.mid_nonlin(x).view(N, 4, -1, D, H, W)
-        x = ((torch.sum(x * feature_attention.unsqueeze(2), dim=(-1, -2, -3)) + self.mid_bias) /
-                torch.sum(feature_attention, dim=(-1, -2, -3)).unsqueeze(2) + 1.0)
+        if self.return_reduced:
+            x_per_slice = ((torch.sum(x * feature_attention.unsqueeze(2), dim=(-1, -2, -3)) + self.mid_bias) /
+                 torch.sum(feature_attention, dim=(-1, -2, -3)).unsqueeze(2) + 1.0)
+            x = ((torch.sum(x * feature_attention.unsqueeze(2), dim=(0, -1, -2, -3)).unsqueeze(0) + self.mid_bias) /
+                 torch.sum(feature_attention, dim=(0, -1, -2, -3)).unsqueeze(0).unsqueeze(2) + 1.0)
+
+            return x, x_per_slice, roi_logits
+        else:
+            x = ((torch.sum(x * feature_attention.unsqueeze(2), dim=(-1, -2, -3)) + self.mid_bias) /
+                    torch.sum(feature_attention, dim=(-1, -2, -3)).unsqueeze(2) + 1.0)
 
         return x, roi_logits
 
@@ -907,44 +928,60 @@ class SupervisedAttentionClassifier(torch.nn.Module):
     def __init__(self, backbone: torch.nn.Module, backbone_out_channels: int, conv_hidden_channels: int,
                  classification_levels: list[int], reduction="mean"):
         super(SupervisedAttentionClassifier, self).__init__()
-        assert reduction in ["mean", "union"], "The reduction must be either mean or union"
+        assert reduction in ["mean", "union", "deep"], "The reduction must be either mean, union or deep"
+        self.reduction = reduction
 
         self.backbone = backbone
         self.backbone_out_channels = backbone_out_channels
         self.conv_hidden_channels = conv_hidden_channels
 
-        self.attention_layer = SupervisedAttentionLinearLayer(backbone_out_channels, conv_hidden_channels)
+        self.attention_layer = SupervisedAttentionLinearLayer(backbone_out_channels, conv_hidden_channels,
+                                                              return_reduced=(reduction == "deep"))
         self.classifier_neck = ClassifierNeck(conv_hidden_channels, classification_levels)
-        self.proba_reduction_head = UnionProbaReductionHead(classification_levels) if reduction == "union" else MeanProbaReductionHead(classification_levels)
+        if reduction != "deep":
+            self.proba_reduction_head = UnionProbaReductionHead(classification_levels) if reduction == "union" else MeanProbaReductionHead(classification_levels)
 
     def forward(self, x):
         x = self.backbone(x)
-        x, roi_logits = self.attention_layer(x)
-        per_slice_logits = self.classifier_neck(x)
-        pred_probas = self.proba_reduction_head(per_slice_logits)
-
-        return pred_probas, per_slice_logits, roi_logits
+        if self.reduction == "deep":
+            x, x_per_slice, roi_logits = self.attention_layer(x)
+            per_slice_logits = self.classifier_neck(x_per_slice)
+            pred_logits = self.classifier_neck(x)
+            return pred_logits, per_slice_logits, roi_logits
+        else:
+            x, roi_logits = self.attention_layer(x)
+            per_slice_logits = self.classifier_neck(x)
+            pred_probas = self.proba_reduction_head(per_slice_logits)
+            return pred_probas, per_slice_logits, roi_logits
 
 class SupervisedAttentionClassifier3D(torch.nn.Module):
     def __init__(self, backbone: torch.nn.Module, backbone_first_channels:int, backbone_mid_channels:int, backbone_last_channels:int,
                        backbone_feature_width:int, backbone_feature_height:int, conv_hidden_channels: int,
                        classification_levels: list[int], reduction="mean"):
         super(SupervisedAttentionClassifier3D, self).__init__()
-        assert reduction in ["mean", "union"], "The reduction must be either mean or union"
+        assert reduction in ["mean", "union", "deep"], "The reduction must be either mean, union or deep"
+        self.reduction = reduction
 
         self.backbone = backbone
 
         self.ushaped_neck = NeighborhoodROILayer(backbone_first_channels, backbone_mid_channels, backbone_last_channels,
                                                  backbone_feature_width, backbone_feature_height)
-        self.attention_layer = SupervisedAttentionLinearLayer3D(backbone_first_channels * 16, conv_hidden_channels)
+        self.attention_layer = SupervisedAttentionLinearLayer3D(backbone_first_channels * 16, conv_hidden_channels,
+                                                                return_reduced=(reduction == "deep"))
         self.classifier_neck = ClassifierNeck(conv_hidden_channels, classification_levels)
-        self.proba_reduction_head = UnionProbaReductionHead(classification_levels) if reduction == "union" else MeanProbaReductionHead(classification_levels)
+        if reduction != "deep":
+            self.proba_reduction_head = UnionProbaReductionHead(classification_levels) if reduction == "union" else MeanProbaReductionHead(classification_levels)
 
     def forward(self, x):
         x = self.backbone(x)
         x = self.ushaped_neck(x)
-        x, roi_logits = self.attention_layer(x)
-        per_slice_logits = self.classifier_neck(x)
-        pred_probas = self.proba_reduction_head(per_slice_logits)
-
-        return pred_probas, per_slice_logits, roi_logits
+        if self.reduction == "deep":
+            x, x_per_slice, roi_logits = self.attention_layer(x)
+            per_slice_logits = self.classifier_neck(x_per_slice)
+            pred_logits = self.classifier_neck(x)
+            return pred_logits, per_slice_logits, roi_logits
+        else:
+            x, roi_logits = self.attention_layer(x)
+            per_slice_logits = self.classifier_neck(x)
+            pred_probas = self.proba_reduction_head(per_slice_logits)
+            return pred_probas, per_slice_logits, roi_logits
