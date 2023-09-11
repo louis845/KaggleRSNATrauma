@@ -213,6 +213,18 @@ def ternary_focal_loss_slicepreds(preds: torch.Tensor, target: torch.Tensor):
     assert focus.shape == ce.shape
     return torch.mean(focus * ce)
 
+final_predictions_logits = False
+def binary_loss(preds: torch.Tensor, target: torch.Tensor):
+    if final_predictions_logits:
+        return torch.mean(torch.nn.functional.binary_cross_entropy_with_logits(preds, target, reduction="none"))
+    else:
+        return torch.mean(torch.nn.functional.binary_cross_entropy(preds, target, reduction="none"))
+
+def ternary_loss(preds: torch.Tensor, target: torch.Tensor):
+    if final_predictions_logits:
+        return torch.nn.functional.cross_entropy(preds, target, reduction="mean")
+    else:
+        return torch.nn.functional.nll_loss(torch.log(torch.clamp(preds, min=1e-10)), target, reduction="mean")
 
 def single_training_step_segmentation(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
                          slices_: torch.Tensor, segmentations_: torch.Tensor, is_expert: bool):
@@ -260,9 +272,9 @@ def single_training_step_injury(model_: torch.nn.Module, optimizer_: torch.optim
             deep_class_losses.append(class_loss.item())
 
         if is_ternary:
-            class_loss = torch.nn.functional.nll_loss(torch.log(torch.clamp(pred_probas[k], min=1e-10)), torch.max(injury_labels[k], dim=0, keepdim=True)[0], reduction="mean")
+            class_loss = ternary_loss(pred_probas[k], torch.max(injury_labels[k], dim=0, keepdim=True)[0])
         else:
-            class_loss = torch.nn.functional.binary_cross_entropy(pred_probas[k], torch.max(injury_labels[k], dim=0, keepdim=True)[0].unsqueeze(0).to(torch.float32), reduction="mean")
+            class_loss = binary_loss(pred_probas[k], torch.max(injury_labels[k], dim=0, keepdim=True)[0].unsqueeze(0).to(torch.float32))
         loss += class_loss
         class_losses.append(class_loss.item())
 
@@ -278,7 +290,10 @@ def single_training_step_injury(model_: torch.nn.Module, optimizer_: torch.optim
                 pred_classes.append(torch.argmax(pred_probas[k], dim=1))
                 per_slice_pred_classes.append(torch.argmax(per_slice_logits[k], dim=1))
             else:
-                pred_classes.append((pred_probas[k] > 0.5).squeeze(-1).to(torch.long))
+                if final_predictions_logits:
+                    pred_classes.append((pred_probas[k] > 0.0).squeeze(-1).to(torch.long))
+                else:
+                    pred_classes.append((pred_probas[k] > 0.5).squeeze(-1).to(torch.long))
                 per_slice_pred_classes.append((per_slice_logits[k] > 0).squeeze(-1).to(torch.long))
 
     return loss, deep_class_losses, class_losses, pred_classes, per_slice_pred_classes
@@ -442,9 +457,9 @@ def single_validation_step(model_: torch.nn.Module,
         deep_class_losses.append(class_loss.item())
 
         if is_ternary:
-            class_loss = torch.nn.functional.nll_loss(torch.log(torch.clamp(pred_probas[k], min=1e-10)), df_injury_labels[k], reduction="mean")
+            class_loss = ternary_loss(pred_probas[k], df_injury_labels[k])
         else:
-            class_loss = torch.nn.functional.binary_cross_entropy(pred_probas[k], df_injury_labels[k].unsqueeze(-1).to(torch.float32), reduction="mean")
+            class_loss = binary_loss(pred_probas[k], df_injury_labels[k].unsqueeze(-1).to(torch.float32))
         loss += class_loss
         class_losses.append(class_loss.item())
 
@@ -453,7 +468,10 @@ def single_validation_step(model_: torch.nn.Module,
             pred_classes.append(torch.argmax(pred_probas[k], dim=1))
             per_slice_pred_classes.append(torch.argmax(per_slice_logits[k], dim=1))
         else:
-            pred_classes.append((pred_probas[k] > 0.5).squeeze(-1).to(torch.long))
+            if final_predictions_logits:
+                pred_classes.append((pred_probas[k] > 0.0).squeeze(-1).to(torch.long))
+            else:
+                pred_classes.append((pred_probas[k] > 0.5).squeeze(-1).to(torch.long))
             per_slice_pred_classes.append((per_slice_logits[k] > 0).squeeze(-1).to(torch.long))
 
 
@@ -679,6 +697,7 @@ if __name__ == "__main__":
     parser.add_argument("--bottleneck_factor", type=int, default=4, help="The bottleneck factor of the ResNet backbone. Default 4.")
     parser.add_argument("--squeeze_excitation", action="store_false", help="Whether to use squeeze and excitation. Default True.")
     parser.add_argument("--use_3d_prediction", action="store_true", help="Whether or not to predict a 3D region. Default False.")
+    parser.add_argument("--use_deep_reduction", action="store_true", help="Whether or not to use deep reduction. Default False.")
     parser.add_argument("--positive_weight", type=float, default=5.0, help="The weight for positive samples for segmentation. Default 5.0.")
     parser.add_argument("--use_async_sampler", action="store_true", help="Whether or not to use an asynchronous sampler. Default False.")
     parser.add_argument("--num_extra_steps", type=int, default=0, help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
@@ -733,6 +752,7 @@ if __name__ == "__main__":
     bottleneck_factor = args.bottleneck_factor
     squeeze_excitation = args.squeeze_excitation
     use_3d_prediction = args.use_3d_prediction
+    use_deep_reduction = args.use_deep_reduction
     positive_weight = args.positive_weight
     use_async_sampler = args.use_async_sampler
     num_extra_steps = args.num_extra_steps
@@ -763,9 +783,11 @@ if __name__ == "__main__":
     print("Bottleneck factor: " + str(bottleneck_factor))
     print("Squeeze and excitation: " + str(squeeze_excitation))
     print("Use 3D prediction: " + str(use_3d_prediction))
+    print("Use deep reduction: " + str(use_deep_reduction))
     print("Positive weight: " + str(positive_weight))
 
     # Create model and optimizer, and setup 3d or 2d
+    final_predictions_logits = use_deep_reduction
     backbone = model_3d_patch_resnet.ResNet3DBackbone(in_channels=1,
                                                       channel_progression=channel_progression,
                                                       res_conv3d_blocks=hidden3d_blocks,
@@ -780,14 +802,14 @@ if __name__ == "__main__":
         model = model_3d_patch_resnet.SupervisedAttentionClassifier3D(backbone=backbone, backbone_first_channels=deep_channels[0],
                                                         backbone_mid_channels=deep_channels[1], backbone_last_channels=channel_progression[-1],
                                                         backbone_feature_width=18, backbone_feature_height=16, conv_hidden_channels=conv_hidden_channels,
-                                                        classification_levels=UsedLabelManager.levels_used + [1], reduction="union")
+                                                        classification_levels=UsedLabelManager.levels_used + [1], reduction="deep" if use_deep_reduction else "union")
         tensor_2d3d = (0, 2, 3, 4)
         bowel_mask_tensor = torch.tensor([1, 1, 1, 0], dtype=torch.float32, device=config.device) \
             .unsqueeze(0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
     else:
         model = model_3d_patch_resnet.SupervisedAttentionClassifier(backbone=backbone, backbone_out_channels=channel_progression[-1],
                                                                     conv_hidden_channels=conv_hidden_channels, classification_levels=UsedLabelManager.levels_used + [1],
-                                                                    reduction="union")
+                                                                    reduction="deep" if use_deep_reduction else "union")
         tensor_2d3d = (0, 2, 3)
         bowel_mask_tensor = torch.tensor([1, 1, 1, 0], dtype=torch.float32, device=config.device) \
             .unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
@@ -839,6 +861,7 @@ if __name__ == "__main__":
         "bottleneck_factor": bottleneck_factor,
         "squeeze_excitation": squeeze_excitation,
         "use_3d_prediction": use_3d_prediction,
+        "use_deep_reduction": use_deep_reduction,
         "positive_weight": positive_weight,
         "use_async_sampler": use_async_sampler,
         "num_extra_steps": num_extra_steps,
