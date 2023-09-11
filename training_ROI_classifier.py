@@ -477,7 +477,7 @@ def validation_step():
                 else:
                     patient_id = validation_remaning_entries[k - len(validation_expert_entries)]
                     series_id = str(manager_folds.randomly_pick_series([patient_id], data_folder="data_hdf5_cropped")[0])
-                    seg_folder = -1
+                    seg_folder = None
                     validation_use_segmentations = False
                 any_injury = manager_folds.has_injury(patient_id)
                 if any_injury:
