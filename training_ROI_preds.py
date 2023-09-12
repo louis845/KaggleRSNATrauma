@@ -76,9 +76,11 @@ bowel_mask_tensor = None  # to be initialized with tensor_2d3d
 
 # focal loss with exponent 2
 def focal_loss(output: torch.Tensor, target: torch.Tensor, reduce_channels=True, include_bowel=True):
+    with torch.no_grad():
+        extra_weight = (target * (positive_weight - 1) + # weights for positive samples
+                         torch.amax((1 - target), dim=tensor_lastdims, keepdim=True) * (no_labels_extra_weight - 1)) # weights for negative samples
     # logsumexp trick for numerical stability
-    binary_ce = torch.nn.functional.binary_cross_entropy_with_logits(output, target, reduction="none") * (
-                1 + target * (positive_weight - 1))
+    binary_ce = torch.nn.functional.binary_cross_entropy_with_logits(output, target, reduction="none") * (1 + extra_weight)
     if not include_bowel:
         binary_ce = binary_ce * bowel_mask_tensor
     if reduce_channels:
@@ -316,8 +318,10 @@ if __name__ == "__main__":
                         help="Whether to use squeeze and excitation. Default True.")
     parser.add_argument("--use_3d_prediction", action="store_true",
                         help="Whether or not to predict a 3D region. Default False.")
-    parser.add_argument("--positive_weight", type=float, default=3.0,
-                        help="The weight for positive samples. Default 3.0.")
+    parser.add_argument("--positive_weight", type=float, default=8.0,
+                        help="The weight for positive samples. Default 5.0.")
+    parser.add_argument("--no_labels_extra_weight", type=float, default=3.0,
+                        help="The weight for slices with no labels. Default 2.0.")
     parser.add_argument("--use_async_sampler", action="store_true",
                         help="Whether or not to use an asynchronous sampler. Default False.")
     parser.add_argument("--num_extra_steps", type=int, default=0,
@@ -347,6 +351,12 @@ if __name__ == "__main__":
     if args.num_extra_nonexpert_training > 0:
         print("Using {} extra non-expert segmentations for training.".format(args.num_extra_nonexpert_training))
         extra_entries = [int(x) for x in manager_segmentations.get_patients_with_TSM_segmentation()]
+        if len(set(extra_entries).intersection(set([int(x) for x in validation_entries]))) > 0:
+            original_length = len(extra_entries)
+            extra_entries = set(extra_entries).difference(set([int(x) for x in validation_entries]))
+            print("Removed {} extra non-expert segmentations that were in the validation set.".format(original_length -
+                                                                                                      len(extra_entries)))
+            print("Final number of extra non-expert segmentations: {}".format(len(extra_entries)))
         assert len(set(extra_entries).intersection(set([int(x) for x in validation_entries]))) == 0, \
             "Some validation patients have TSM (non-expert) segmentations."
         training_entries = training_shuffle_utils.BiasedShuffleInfo(shuffle_info=[get_representing_shuffle_entry(int(x)) for
@@ -383,6 +393,7 @@ if __name__ == "__main__":
     squeeze_excitation = args.squeeze_excitation
     use_3d_prediction = args.use_3d_prediction
     positive_weight = args.positive_weight
+    no_labels_extra_weight = args.no_labels_extra_weight
     use_async_sampler = args.use_async_sampler
     num_extra_steps = args.num_extra_steps
 
@@ -412,6 +423,7 @@ if __name__ == "__main__":
     print("Squeeze and excitation: " + str(squeeze_excitation))
     print("Use 3D prediction: " + str(use_3d_prediction))
     print("Positive weight: " + str(positive_weight))
+    print("No labels extra weight: " + str(no_labels_extra_weight))
 
     # Create model and optimizer, and setup 3d or 2d
     backbone = model_3d_patch_resnet.ResNet3DBackbone(in_channels=1,
@@ -430,11 +442,13 @@ if __name__ == "__main__":
                                                          last_channels=channel_progression[-1],
                                                          feature_width=18, feature_height=16)
         tensor_2d3d = (0, 2, 3, 4)
+        tensor_lastdims = (2, 3, 4)
         bowel_mask_tensor = torch.tensor([1, 1, 1, 0], dtype=torch.float32, device=config.device) \
             .unsqueeze(0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
     else:
         model = model_3d_patch_resnet.LocalizedROINet(backbone=backbone, num_channels=channel_progression[-1])
         tensor_2d3d = (0, 2, 3)
+        tensor_lastdims = (2, 3)
         bowel_mask_tensor = torch.tensor([1, 1, 1, 0], dtype=torch.float32, device=config.device) \
             .unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
     model = model.to(config.device)
@@ -486,6 +500,7 @@ if __name__ == "__main__":
         "squeeze_excitation": squeeze_excitation,
         "use_3d_prediction": use_3d_prediction,
         "positive_weight": positive_weight,
+        "no_labels_extra_weight": no_labels_extra_weight,
         "use_async_sampler": use_async_sampler,
         "num_extra_steps": num_extra_steps,
         "train_dataset": train_dset_name,
