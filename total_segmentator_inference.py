@@ -89,10 +89,11 @@ if __name__ == "__main__":
     shape_info = pd.read_csv("data_hdf5_cropped/shape_info.csv", index_col=1)
 
     patient_with_injuries = list(patient_injuries.loc[patient_injuries["any_injury"] == 1].index)
+    all_patients = list(patient_injuries.index)
 
     count = 0
     processed_series = []
-    for patient_id in patient_with_injuries:
+    for patient_id in all_patients:
         patient_folder = os.path.join("data", "train_images", str(patient_id))
         for series_id in os.listdir(patient_folder):
             series_folder = os.path.join(patient_folder, series_id)
