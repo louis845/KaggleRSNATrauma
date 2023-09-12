@@ -16,10 +16,11 @@ if __name__ == "__main__":
 
     patient_injuries = pd.read_csv("data/train.csv", index_col=0)
     patients_with_injuries = list(patient_injuries.loc[patient_injuries["any_injury"] == 1].index)
+    all_patients = list(patient_injuries.index)
 
     series_with_expert_segmentations = [int(x[:-4]) for x in os.listdir("data/segmentations")]
     count = 0
-    for patient_id in patients_with_injuries:
+    for patient_id in all_patients:
         patient_folder = os.path.join("data", "train_images", str(patient_id))
         for series_id in os.listdir(patient_folder):
             if int(series_id) not in series_with_expert_segmentations:
