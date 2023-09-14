@@ -129,7 +129,10 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 img_d, img_h, img_w = image_data["image"].shape
                 image_shared_memory_array[:img_d, :img_h, :img_w] = image_data["image"].numpy()
                 if has_segmentation:
-                    seg_shared_memory_array[:, :img_d, :img_h, :img_w] = image_data["segmentation"].numpy()
+                    if use_3d:
+                        seg_shared_memory_array[:, :img_d, :img_h, :img_w] = image_data["segmentation"].numpy()
+                    else:
+                        seg_shared_memory_array[:, :img_h, :img_w] = image_data["segmentation"].numpy()
 
                 # set value to pass to main process
                 loaded_image_depth.value = img_d
@@ -157,6 +160,7 @@ class SliceLoaderWorker:
     def __init__(self, worker_name: str, max_slice_region_depth=9, use_3d=False, max_image_width=576, max_image_height=512):
         self.max_image_width = max_image_width
         self.max_image_height = max_image_height
+        self.use_3d = use_3d
         image_loading_pipe_recv, self.image_loading_pipe_send = multiprocessing.Pipe(duplex=False)
         self.running = multiprocessing.Value(ctypes.c_bool, True)
         self.image_available_lock = multiprocessing.Lock()
@@ -222,8 +226,12 @@ class SliceLoaderWorker:
         self.image_available_lock.acquire(block=True)
 
         if self.loaded_image_has_segmentations.value:
-            return self.image_shared_memory_array[:self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width.value].copy(),\
-                    self.seg_shared_memory_array[:, :self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width.value].copy()
+            if self.use_3d:
+                return self.image_shared_memory_array[:self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width.value].copy(),\
+                        self.seg_shared_memory_array[:, :self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width.value].copy()
+            else:
+                return self.image_shared_memory_array[:self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width.value].copy(),\
+                        self.seg_shared_memory_array[:, :self.loaded_image_height.value, :self.loaded_image_width.value].copy()
         else:
             return self.image_shared_memory_array[:self.loaded_image_depth.value, :self.loaded_image_height.value, :self.loaded_image_width.value].copy(), \
                      None
