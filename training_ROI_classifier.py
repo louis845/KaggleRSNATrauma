@@ -216,9 +216,9 @@ def ternary_focal_loss_slicepreds(preds: torch.Tensor, target: torch.Tensor):
 final_predictions_logits = False
 def binary_loss(preds: torch.Tensor, target: torch.Tensor):
     if final_predictions_logits:
-        return torch.mean(torch.nn.functional.binary_cross_entropy_with_logits(preds, target, reduction="none"))
+        return torch.mean((target * 2 + 1) * torch.nn.functional.binary_cross_entropy_with_logits(preds, target, reduction="none"))
     else:
-        return torch.mean(torch.nn.functional.binary_cross_entropy(preds, target, reduction="none"))
+        return torch.mean((target * 2 + 1) * torch.nn.functional.binary_cross_entropy(preds, target, reduction="none"))
 
 def ternary_loss(preds: torch.Tensor, target: torch.Tensor):
     if final_predictions_logits:
@@ -236,7 +236,7 @@ def single_training_step_segmentation(model_: torch.nn.Module, optimizer_: torch
     loss = focal_loss_segmentation(pred_segmentations, segmentations_, reduce_channels=True, include_bowel=is_expert)
     if not is_expert:
         loss = loss * 0.5
-    (loss * 0.0625).backward()
+    (loss).backward()
     optimizer.step()
 
     with torch.no_grad():
@@ -268,14 +268,16 @@ def single_training_step_injury(model_: torch.nn.Module, optimizer_: torch.optim
                 class_loss = ternary_focal_loss_slicepreds(per_slice_logits[k], injury_labels[k])
             else:
                 class_loss = binary_focal_loss_slicepreds(per_slice_logits[k], injury_labels[k].unsqueeze(-1))
-            loss += (class_loss * 0.25)
+            if k == 4:
+                loss += (class_loss)
             deep_class_losses.append(class_loss.item())
 
         if is_ternary:
             class_loss = ternary_loss(pred_probas[k], torch.max(injury_labels[k], dim=0, keepdim=True)[0])
         else:
             class_loss = binary_loss(pred_probas[k], torch.max(injury_labels[k], dim=0, keepdim=True)[0].unsqueeze(0).to(torch.float32))
-        loss += class_loss
+        if k != 4:
+            loss += class_loss
         class_losses.append(class_loss.item())
 
     loss.backward()

@@ -359,6 +359,8 @@ if __name__ == "__main__":
             print("Final number of extra non-expert segmentations: {}".format(len(extra_entries)))
         assert len(set(extra_entries).intersection(set([int(x) for x in validation_entries]))) == 0, \
             "Some validation patients have TSM (non-expert) segmentations."
+        expert_patients = manager_segmentations.get_patients_with_expert_segmentation()
+        validation_entries = [x for x in validation_entries if str(x) in expert_patients]
         training_entries = training_shuffle_utils.BiasedShuffleInfo(shuffle_info=[get_representing_shuffle_entry(int(x)) for
                                                                             x in training_entries],
                                                  shuffle_info_extra=[get_representing_shuffle_entry(int(x)) for
