@@ -350,7 +350,10 @@ if __name__ == "__main__":
             patient_id), "Patient {} has no expert or TSM segmentations.".format(patient_id)
     if args.num_extra_nonexpert_training > 0:
         print("Using {} extra non-expert segmentations for training.".format(args.num_extra_nonexpert_training))
-        extra_entries = [int(x) for x in manager_segmentations.get_patients_with_TSM_segmentation()]
+        expert_patients = manager_segmentations.get_patients_with_expert_segmentation()
+        extra_entries = [int(x) for x in manager_segmentations.get_patients_with_TSM_segmentation() if
+                            str(x) not in expert_patients]
+        training_entries = [int(x) for x in training_entries if str(x) in expert_patients]
         if len(set(extra_entries).intersection(set([int(x) for x in validation_entries]))) > 0:
             original_length = len(extra_entries)
             extra_entries = set(extra_entries).difference(set([int(x) for x in validation_entries]))
@@ -359,7 +362,6 @@ if __name__ == "__main__":
             print("Final number of extra non-expert segmentations: {}".format(len(extra_entries)))
         assert len(set(extra_entries).intersection(set([int(x) for x in validation_entries]))) == 0, \
             "Some validation patients have TSM (non-expert) segmentations."
-        expert_patients = manager_segmentations.get_patients_with_expert_segmentation()
         validation_entries = [x for x in validation_entries if str(x) in expert_patients]
         training_entries = training_shuffle_utils.BiasedShuffleInfo(shuffle_info=[get_representing_shuffle_entry(int(x)) for
                                                                             x in training_entries],
