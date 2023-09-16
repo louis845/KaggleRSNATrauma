@@ -290,17 +290,19 @@ class OrganSegmentator():
                         idx += 1
                         if idx >= batch_size:
                             break
-            while idx < batch_size:
-                # add the middle of maximum gaps between searched slices
-                searched_locs = np.argwhere(searched_slices).squeeze(-1)
-                gap_lengths = np.diff(searched_locs)
-                max_gap_idx = np.argmax(gap_lengths)
-                if gap_lengths[max_gap_idx] >= min_gap:
-                    pred_suggestions[idx] = (searched_locs[max_gap_idx] + gap_lengths[max_gap_idx] // 2) + min_slice_idx
-                    searched_slices[pred_suggestions[idx] - min_slice_idx] = True
-                    idx += 1
-                else:
-                    break
+            # if some organs are still not found
+            if not np.all(found_organs):
+                while idx < batch_size:
+                    # add the middle of maximum gaps between searched slices
+                    searched_locs = np.argwhere(searched_slices).squeeze(-1)
+                    gap_lengths = np.diff(searched_locs)
+                    max_gap_idx = np.argmax(gap_lengths)
+                    if gap_lengths[max_gap_idx] >= min_gap:
+                        pred_suggestions[idx] = (searched_locs[max_gap_idx] + gap_lengths[max_gap_idx] // 2) + min_slice_idx
+                        searched_slices[pred_suggestions[idx] - min_slice_idx] = True
+                        idx += 1
+                    else:
+                        break
             # terminate if no more predictions are needed
             if idx == 0:
                 break
