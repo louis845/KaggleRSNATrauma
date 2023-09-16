@@ -141,7 +141,7 @@ class OrganSegmentator():
     @staticmethod
     def reduce_slice(preds):
         with torch.no_grad():
-            return torch.any(torch.any(preds, -1), -2).cpu().numpy()
+            return torch.any(torch.any(preds, -1), -1).cpu().numpy()
 
 
     def predict_organs(self, ct_3d_volume_path: str, z_positions_path: str, batch_size=8,
@@ -177,6 +177,7 @@ class OrganSegmentator():
             # predict at suggested locations
             preds = self.predict_at_locations(pred_suggestions)
             pred_slices = self.reduce_slice(preds) # shape (batch_size, 4)
+
             searched_slices[pred_suggestions - min_slice_idx] = True
 
             # update slices checking status
@@ -232,6 +233,7 @@ class OrganSegmentator():
             # terminate if no more predictions are needed
             if idx == 0:
                 break
+            pred_suggestions = pred_suggestions[:idx]
 
         left = np.sum(organ_left_bounds, axis=-1) // 2
         right = np.sum(organ_right_bounds, axis=-1) // 2
