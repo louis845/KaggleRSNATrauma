@@ -82,6 +82,7 @@ class OrganSegmentator():
         if not self.is_flipped:
             min_slice_idx = self.z_positions.shape[0] - 1 - min_slice_idx
             max_slice_idx = self.z_positions.shape[0] - 1 - max_slice_idx
+            max_slice_idx, min_slice_idx = min_slice_idx, max_slice_idx
         return min_slice_idx, max_slice_idx
 
     def load_local_features(self, slice_idx, stride_mm: int=5, depth: int=9):
