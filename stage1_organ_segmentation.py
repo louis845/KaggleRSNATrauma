@@ -29,6 +29,13 @@ def consecutive_repeats(arr):
         repeats = np.diff(idx)
         return arr[idx[:-1]], repeats
 
+def model_predict(model, image_tensor):
+    with torch.no_grad():
+        pred = model(image_tensor) > 0
+    return pred
+
+model_predict_compile = torch.compile(model_predict)
+
 class OrganSegmentator():
 
     ct_3d_volume: h5py.File
@@ -54,6 +61,8 @@ class OrganSegmentator():
         self.z_positions = None
         self.is_flipped = False
         self.data_loaded = False
+        self.loaded_data_H = None
+        self.loaded_data_W = None
 
     def load_checkpoint(self, model_checkpoint_path: str):
         # for example, model_checkpoint_path = "/path/to/model.pt"
@@ -68,6 +77,41 @@ class OrganSegmentator():
         self.z_positions = np.load(z_positions_path)
         self.is_flipped = np.diff(self.z_positions).mean() > 0.0
         self.data_loaded = True
+        self.loaded_data_H = self.ct_3d_volume["ct_3D_image"].shape[-2]
+        self.loaded_data_W = self.ct_3d_volume["ct_3D_image"].shape[-1]
+
+    def get_resize_strategy(self):
+        assert self.data_loaded, "Please load the data first."
+        resize_strategy = {}
+        if self.loaded_data_H > 512:
+            resize_strategy["H"] = {
+                "mode": "crop",
+                "start": (self.loaded_data_H - 512) // 2,
+                "end": (self.loaded_data_H + 512) // 2
+            }
+        else:
+            pad_top = (512 - self.loaded_data_H) // 2
+            pad_bottom = 512 - self.loaded_data_H - pad_top
+            resize_strategy["H"] = {
+                "mode": "pad",
+                "start": pad_top,
+                "end": pad_bottom
+            }
+        if self.loaded_data_W > 576:
+            resize_strategy["W"] = {
+                "mode": "crop",
+                "start": (self.loaded_data_W - 576) // 2,
+                "end": (self.loaded_data_W + 576) // 2
+            }
+        else:
+            pad_left = (576 - self.loaded_data_W) // 2
+            pad_right = 576 - self.loaded_data_W - pad_left
+            resize_strategy["W"] = {
+                "mode": "pad",
+                "start": pad_left,
+                "end": pad_right
+            }
+        return resize_strategy
 
     def close(self):
         if self.data_loaded:
@@ -127,26 +171,21 @@ class OrganSegmentator():
                     torch.tensor(self.load_local_features(slice_idxs[k], stride_mm, depth), dtype=torch.float32,
                              device=self.device) for k in range(len(slice_idxs))], dim=0).unsqueeze(1)
         # the shape should be (batch_size, 1, D, H, W)
-        assert image_tensor.shape[:3] == (len(slice_idxs), 1, depth)
-        with torch.no_grad():
-            # if height > 512, we crop the height at the center to make it 512.
-            # conversely, if height < 512, we pad the height at the top and bottom to make it 512.
-            if image_tensor.shape[3] > 512:
-                image_tensor = image_tensor[..., (image_tensor.shape[3] - 512) // 2:(image_tensor.shape[3] + 512) // 2, :]
-            elif image_tensor.shape[3] < 512:
-                pad_top = (512 - image_tensor.shape[3]) // 2
-                pad_bottom = 512 - image_tensor.shape[3] - pad_top
-                image_tensor = torch.nn.functional.pad(image_tensor, (0, 0, pad_top, pad_bottom))
-            # if width > 576, we crop the width at the center to make it 576.
-            # conversely, if width < 576, we pad the width at the left and right to make it 576.
-            if image_tensor.shape[4] > 576:
-                image_tensor = image_tensor[..., (image_tensor.shape[4] - 576) // 2:(image_tensor.shape[4] + 576) // 2]
-            elif image_tensor.shape[4] < 576:
-                pad_left = (576 - image_tensor.shape[4]) // 2
-                pad_right = 576 - image_tensor.shape[4] - pad_left
-                image_tensor = torch.nn.functional.pad(image_tensor, (pad_left, pad_right, 0, 0))
+        assert image_tensor.shape == (len(slice_idxs), 1, depth, self.loaded_data_H, self.loaded_data_W)
 
-            preds = self.model(image_tensor) > 0
+        resize_strategy = self.get_resize_strategy()
+        with torch.no_grad():
+            if resize_strategy["H"]["mode"] == "crop":
+                image_tensor = image_tensor[..., resize_strategy["H"]["start"]:resize_strategy["H"]["end"], :]
+            else:
+                image_tensor = torch.nn.functional.pad(image_tensor, (0, 0, resize_strategy["H"]["start"], resize_strategy["H"]["end"]))
+            if resize_strategy["W"]["mode"] == "crop":
+                image_tensor = image_tensor[..., resize_strategy["W"]["start"]:resize_strategy["W"]["end"]]
+            else:
+                image_tensor = torch.nn.functional.pad(image_tensor, (resize_strategy["W"]["start"], resize_strategy["W"]["end"]))
+            assert image_tensor.shape == (len(slice_idxs), 1, depth, 512, 576)
+
+            preds = model_predict_compile(self.model, image_tensor)
 
         # the shape should be (batch_size, 4, H, W)
         assert preds.shape[:2] == (len(slice_idxs), 4)
@@ -159,7 +198,7 @@ class OrganSegmentator():
 
 
     def predict_organs(self, ct_3d_volume_path: str, z_positions_path: str, batch_size=8,
-                            locate_organ_min_gap_ratio=0.05) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                            locate_organ_min_gap_ratio=0.05) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Predicts where the organs are located at. For each organ (liver: 0, spleen: 1, kidney: 2, bowel: 3), we predict
         a 2 tuple, representing the index of the slice number where the organ starts and ends.
@@ -173,25 +212,31 @@ class OrganSegmentator():
             found_organs: np.ndarray of shape (4,), type bool, representing whether the organ is found or not
             organ_left: np.ndarray of shape (4,), type int, representing the index of the slice number where the organ starts
             organ_right: np.ndarray of shape (4,), type int, representing the index of the slice number where the organ ends
+            organ_location: np.ndarray of shape (4, H, W), type int, representing the rough prediction of location of the organ
         """
         assert self.model_loaded, "Please load the model checkpoint first."
         self.load_data(ct_3d_volume_path, z_positions_path)
         min_slice_idx, max_slice_idx = self.find_min_max_slice_idxs()
-
+        # the variables below are used to store the results
         found_organs = np.full(shape=(4,), fill_value=False, dtype=bool)
         organ_left_bounds = np.full(shape=(4, 2), fill_value=min_slice_idx, dtype=np.int32)
         organ_right_bounds = np.full(shape=(4, 2), fill_value=max_slice_idx, dtype=np.int32)
-
+        # the states of the search algorithm
         searched_slices = np.full(shape=max_slice_idx - min_slice_idx + 1, fill_value=False, dtype=bool)
         pred_suggestions = np.linspace(min_slice_idx, max_slice_idx, num=batch_size, dtype=np.int32)
         min_gap = max(int((max_slice_idx - min_slice_idx) * locate_organ_min_gap_ratio), 2)
+        # the model 2D location of the organs
+        organ_location = torch.zeros(size=(4, 16, 18), dtype=torch.bool, device=self.device)
 
         # loop
         while True:
             # predict at suggested locations
-            preds = self.predict_at_locations(pred_suggestions)
+            preds = self.predict_at_locations(pred_suggestions) # shape (batch_size, 4, 16, 18)
             pred_slices = self.reduce_slice(preds) # shape (batch_size, 4)
             searched_slices[pred_suggestions - min_slice_idx] = True
+            # update organ_location
+            with torch.no_grad():
+                organ_location = torch.logical_or(torch.any(preds, dim=0), organ_location)
 
             # update slices checking status
             for k in range(4):
@@ -249,7 +294,27 @@ class OrganSegmentator():
 
         left = np.sum(organ_left_bounds, axis=-1) // 2
         right = np.sum(organ_right_bounds, axis=-1) // 2
-        return found_organs, left, right
+
+        organ_location = organ_location.cpu().numpy()
+        # upscale to size fed into model
+        organ_location = np.repeat(np.repeat(organ_location, repeats=32, axis=1), repeats=32, axis=2)
+        # crop to original size by reversing the resize strategy
+        resize_strategy = self.get_resize_strategy()
+        if resize_strategy["H"]["mode"] == "crop":
+            pad_top = resize_strategy["H"]["start"]
+            pad_bottom = self.loaded_data_H - resize_strategy["H"]["end"]
+            organ_location = np.pad(organ_location, ((0, 0), (pad_top, pad_bottom), (0, 0)), mode="constant", constant_values=False)
+        else:
+            organ_location = organ_location[:, resize_strategy["H"]["start"]:-resize_strategy["H"]["end"], :]
+        if resize_strategy["W"]["mode"] == "crop":
+            pad_left = resize_strategy["W"]["start"]
+            pad_right = self.loaded_data_W - resize_strategy["W"]["end"]
+            organ_location = np.pad(organ_location, ((0, 0), (0, 0), (pad_left, pad_right)), mode="constant", constant_values=False)
+        else:
+            organ_location = organ_location[:, :, resize_strategy["W"]["start"]:-resize_strategy["W"]["end"]]
+
+        assert organ_location.shape == (4, self.loaded_data_H, self.loaded_data_W)
+        return found_organs, left, right, organ_location
 
 if __name__ == "__main__":
     folder = "stage1_organ_segmentator"
