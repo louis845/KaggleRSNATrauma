@@ -382,10 +382,13 @@ if __name__ == "__main__":
             ct_path = os.path.join(series_folder, "ct_3D_image.hdf5")
             z_pos_path = os.path.join(series_folder, "z_positions.npy")
 
-            found_organs, left, right = segmentator.predict_organs(ct_path, z_pos_path)
+            found_organs, left, right, organ_location = segmentator.predict_organs(ct_path, z_pos_path)
 
             pd.DataFrame({
                 "found": found_organs,
                 "left": left,
                 "right": right
             }, index=["liver", "spleen", "kidney", "bowel"]).to_csv(os.path.join(out_folder, series_id + ".csv"))
+
+            with h5py.File(os.path.join(out_folder, series_id + ".hdf5"), "w") as f:
+                f.create_dataset("organ_location", data=organ_location, compression="gzip", compression_opts=3)
