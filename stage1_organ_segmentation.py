@@ -34,7 +34,7 @@ class OrganSegmentator():
                                                       squeeze_excitation=squeeze_excitation,
                                                       return_3d_features=False)
         # model
-        self.model = model_3d_patch_resnet.LocalizedROINet(backbone=self.backbone, num_channels=channel_progression[-1])
+        self.model = model_3d_patch_resnet.LocalizedROINet(backbone=backbone, num_channels=channel_progression[-1])
         self.model.to(device)
         self.device = device
         self.model_loaded = False
