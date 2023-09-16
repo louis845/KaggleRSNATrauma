@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import io
 
 import abc
 
@@ -86,6 +87,31 @@ class BinaryMetrics(Metrics):
         self.tn = 0
         self.fp = 0
         self.fn = 0
+
+    def get_iou(self):
+        if self.tp + self.fp + self.fn == 0:
+            iou = 1.0
+        else:
+            iou = self.tp / (self.tp + self.fp + self.fn)
+        return iou
+
+    def report_print(self, report_iou=False):
+        accuracy, precision, recall = self.get()
+        print("--------------------- {} ---------------------".format(self.name))
+        if report_iou:
+            iou = self.get_iou()
+            print("Accuracy: {:.4f}, Precision: {:.4f}, Recall: {:.4f}, IoU: {:.4f}".format(accuracy, precision, recall, iou))
+        else:
+            print("Accuracy: {:.4f}, Precision: {:.4f}, Recall: {:.4f}".format(accuracy, precision, recall))
+
+    def report_print_to_file(self, file: io.TextIOWrapper, report_iou=False):
+        accuracy, precision, recall = self.get()
+        file.write("--------------------- {} ---------------------\n".format(self.name))
+        if report_iou:
+            iou = self.get_iou()
+            file.write("Accuracy: {:.4f}, Precision: {:.4f}, Recall: {:.4f}, IoU: {:.4f}\n".format(accuracy, precision, recall, iou))
+        else:
+            file.write("Accuracy: {:.4f}, Precision: {:.4f}, Recall: {:.4f}\n".format(accuracy, precision, recall))
 
 class TernaryMetrics(Metrics):
     def __init__(self, name: str):
