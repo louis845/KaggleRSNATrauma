@@ -56,8 +56,7 @@ class OrganSegmentator():
             self.close()
         self.ct_3d_volume = h5py.File(ct_3d_volume_path, "r")
         self.z_positions = np.load(z_positions_path)
-        if np.abs(np.diff(self.z_positions)).mean() > 0.0:
-            self.is_flipped = True
+        self.is_flipped = np.diff(self.z_positions).mean() > 0.0
         self.data_loaded = True
 
     def close(self):
