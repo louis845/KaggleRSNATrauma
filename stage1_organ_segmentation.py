@@ -159,7 +159,7 @@ class OrganSegmentator():
         local_slice_image = self.ct_3d_volume["ct_3D_image"][collapsed_nearest_indices, ...]
         local_slice_image = np.repeat(local_slice_image, repeats, axis=0)
         if self.is_flipped:
-            local_slice_image = local_slice_image[::-1, ...]
+            local_slice_image = local_slice_image[::-1, ...].copy()
         return local_slice_image
 
     def predict_at_locations(self, slice_idxs: np.ndarray, stride_mm: int=5, depth: int=9):
@@ -197,7 +197,7 @@ class OrganSegmentator():
             return torch.any(torch.any(preds, -1), -1).cpu().numpy()
 
 
-    def predict_organs(self, ct_3d_volume_path: str, z_positions_path: str, batch_size=8,
+    def predict_organs(self, ct_3d_volume_path: str, z_positions_path: str, batch_size=32,
                             locate_organ_min_gap_ratio=0.05) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Predicts where the organs are located at. For each organ (liver: 0, spleen: 1, kidney: 2, bowel: 3), we predict
