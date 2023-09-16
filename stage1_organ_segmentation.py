@@ -96,8 +96,8 @@ class OrganSegmentator():
         if self.is_flipped:
             nearest_slice_indices = find_closest(self.z_positions, expected_zposes)
         else:
-            nearest_slice_indices = self.z_positions.shape[0] - 1 -\
-                                        find_closest(self.z_positions[::-1], expected_zposes)
+            nearest_slice_indices = (self.z_positions.shape[0] - 1 -
+                                        find_closest(self.z_positions[::-1], expected_zposes))[::-1]
         nearest_slice_indices[depth_radius] = slice_idx
         local_slice_image = self.ct_3d_volume["ct_3D_image"][nearest_slice_indices, ...]
         if self.is_flipped:
@@ -141,7 +141,7 @@ class OrganSegmentator():
     @staticmethod
     def reduce_slice(preds):
         with torch.no_grad():
-            return torch.any(torch.any(preds, -1), preds, -2).cpu().numpy()
+            return torch.any(torch.any(preds, -1), -2).cpu().numpy()
 
 
     def predict_organs(self, ct_3d_volume_path: str, z_positions_path: str, batch_size=8,
