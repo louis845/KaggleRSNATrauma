@@ -174,10 +174,6 @@ class OrganSegmentator():
 
         # loop
         while True:
-            print(pred_suggestions)
-            print(organ_left_bounds)
-            print(organ_right_bounds)
-            print("----------------------------------------------------------")
             # predict at suggested locations
             preds = self.predict_at_locations(pred_suggestions)
             pred_slices = self.reduce_slice(preds) # shape (batch_size, 4)
