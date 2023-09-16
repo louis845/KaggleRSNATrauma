@@ -19,6 +19,16 @@ def find_closest(Z: np.ndarray, x: np.ndarray):
     i[mask] -= 1
     return i
 
+def consecutive_repeats(arr):
+    if len(arr) == 0:
+        return np.array([])
+    else:
+        diff = np.diff(arr)
+        idx = np.argwhere(diff != 0).squeeze(-1) + 1
+        idx = np.concatenate([np.array([0]), idx, np.array([len(arr)])], axis=0)
+        repeats = np.diff(idx)
+        return arr[idx[:-1]], repeats
+
 class OrganSegmentator():
 
     ct_3d_volume: h5py.File
@@ -99,7 +109,11 @@ class OrganSegmentator():
             nearest_slice_indices = (self.z_positions.shape[0] - 1 -
                                         find_closest(self.z_positions[::-1], expected_zposes))[::-1]
         nearest_slice_indices[depth_radius] = slice_idx
-        local_slice_image = self.ct_3d_volume["ct_3D_image"][nearest_slice_indices, ...]
+
+        # load from the h5py file
+        collapsed_nearest_indices, repeats = consecutive_repeats(nearest_slice_indices)
+        local_slice_image = self.ct_3d_volume["ct_3D_image"][collapsed_nearest_indices, ...]
+        local_slice_image = np.repeat(local_slice_image, repeats, axis=0)
         if self.is_flipped:
             local_slice_image = local_slice_image[::-1, ...]
         return local_slice_image
