@@ -174,6 +174,10 @@ class OrganSegmentator():
 
         # loop
         while True:
+            print(pred_suggestions)
+            print(organ_left_bounds)
+            print(organ_right_bounds)
+            print("----------------------------------------------------------")
             # predict at suggested locations
             preds = self.predict_at_locations(pred_suggestions)
             pred_slices = self.reduce_slice(preds) # shape (batch_size, 4)
@@ -182,8 +186,8 @@ class OrganSegmentator():
 
             # update slices checking status
             for k in range(4):
-                locations = np.argwhere(pred_slices[:, k]).squeeze(-1)
                 if not found_organs[k]:
+                    locations = np.argwhere(pred_slices[:, k]).squeeze(-1)
                     if np.any(pred_slices[:, k]):
                         found_organs[k] = True
                         organ_left_bounds[k, 0] = min_slice_idx
@@ -191,19 +195,30 @@ class OrganSegmentator():
                         organ_right_bounds[k, 0] = pred_suggestions[locations[-1]]
                         organ_right_bounds[k, 1] = max_slice_idx
                 else:
-                    if np.any(pred_slices[:, k]):
-                        organ_left_bounds[k, 1] = min(pred_suggestions[locations[0]], organ_left_bounds[k, 1])
-                        organ_right_bounds[k, 0] = max(pred_suggestions[locations[-1]], organ_right_bounds[k, 0])
-                    else:
-                        slice_locations = pred_suggestions # all slices are predicted to be False
-                        inside_left_bounds = (organ_left_bounds[k, 0] <= slice_locations) & (slice_locations < organ_left_bounds[k, 1])
-                        inside_right_bounds = (organ_right_bounds[k, 0] < slice_locations) & (slice_locations <= organ_right_bounds[k, 1])
-                        if np.any(inside_left_bounds):
-                            # rightmost slice that is inside the left bound
-                            organ_left_bounds[k, 0] = slice_locations[np.argwhere(inside_left_bounds).squeeze(-1)[-1]]
-                        if np.any(inside_right_bounds):
-                            # leftmost slice that is inside the right bound
-                            organ_right_bounds[k, 1] = slice_locations[np.argwhere(inside_right_bounds).squeeze(-1)[0]]
+                    # boolean mask of which slices are in the left and right bounds
+                    inside_left_bounds = (organ_left_bounds[k, 0] <= pred_suggestions) & (pred_suggestions < organ_left_bounds[k, 1])
+                    inside_right_bounds = (organ_right_bounds[k, 0] < pred_suggestions) & (pred_suggestions <= organ_right_bounds[k, 1])
+
+                    if inside_left_bounds.sum() > 0:
+                        pred_left_slices = pred_slices[inside_left_bounds, k]
+                        pred_left_suggestions = pred_suggestions[inside_left_bounds]
+                        if np.any(pred_left_slices):
+                            # the right bound of the left bounds will be set to the leftmost location of detected organ
+                            locations = np.argwhere(pred_left_slices).squeeze(-1)
+                            organ_left_bounds[k, 1] = min(pred_left_suggestions[locations[0]], organ_left_bounds[k, 1])
+                        else:
+                            # the left bound of the left bounds will be set to the rightmost proposed locations
+                            organ_left_bounds[k, 0] = max(pred_left_suggestions[-1], organ_left_bounds[k, 0])
+                    if inside_right_bounds.sum() > 0:
+                        pred_right_slices = pred_slices[inside_right_bounds, k]
+                        pred_right_suggestions = pred_suggestions[inside_right_bounds]
+                        if np.any(pred_right_slices):
+                            # the left bound of the right bounds will be set to the rightmost location of detected organ
+                            locations = np.argwhere(pred_right_slices).squeeze(-1)
+                            organ_right_bounds[k, 0] = max(pred_right_suggestions[locations[-1]], organ_right_bounds[k, 0])
+                        else:
+                            # the right bound of the right bounds will be set to the leftmost proposed locations
+                            organ_right_bounds[k, 1] = min(pred_right_suggestions[0], organ_right_bounds[k, 1])
 
             # make new predictions
             pred_suggestions = np.zeros(shape=(batch_size,), dtype=np.int32)
@@ -227,13 +242,14 @@ class OrganSegmentator():
                 max_gap_idx = np.argmax(gap_lengths)
                 if gap_lengths[max_gap_idx] >= min_gap:
                     pred_suggestions[idx] = (searched_locs[max_gap_idx] + gap_lengths[max_gap_idx] // 2) + min_slice_idx
+                    searched_slices[pred_suggestions[idx] - min_slice_idx] = True
                     idx += 1
                 else:
                     break
             # terminate if no more predictions are needed
             if idx == 0:
                 break
-            pred_suggestions = pred_suggestions[:idx]
+            pred_suggestions = np.unique(pred_suggestions[:idx])
 
         left = np.sum(organ_left_bounds, axis=-1) // 2
         right = np.sum(organ_right_bounds, axis=-1) // 2
