@@ -168,7 +168,7 @@ class OrganSegmentator():
         organ_left_bounds = np.full(shape=(4, 2), fill_value=min_slice_idx, dtype=np.int32)
         organ_right_bounds = np.full(shape=(4, 2), fill_value=max_slice_idx, dtype=np.int32)
 
-        searched_slices = np.full(shape=len(self.z_positions), fill_value=False, dtype=bool)
+        searched_slices = np.full(shape=max_slice_idx - min_slice_idx + 1, fill_value=False, dtype=bool)
         pred_suggestions = np.linspace(min_slice_idx, max_slice_idx, num=batch_size, dtype=np.int32)
         min_gap = max(int((max_slice_idx - min_slice_idx) * locate_organ_min_gap_ratio), 2)
 
@@ -177,7 +177,7 @@ class OrganSegmentator():
             # predict at suggested locations
             preds = self.predict_at_locations(pred_suggestions)
             pred_slices = self.reduce_slice(preds) # shape (batch_size, 4)
-            searched_slices[pred_suggestions] = True
+            searched_slices[pred_suggestions - min_slice_idx] = True
 
             # update slices checking status
             for k in range(4):
@@ -225,7 +225,7 @@ class OrganSegmentator():
                 gap_lengths = np.diff(searched_locs)
                 max_gap_idx = np.argmax(gap_lengths)
                 if gap_lengths[max_gap_idx] >= min_gap:
-                    pred_suggestions[idx] = searched_locs[max_gap_idx] + gap_lengths[max_gap_idx] // 2
+                    pred_suggestions[idx] = (searched_locs[max_gap_idx] + gap_lengths[max_gap_idx] // 2) + min_slice_idx
                     idx += 1
                 else:
                     break
