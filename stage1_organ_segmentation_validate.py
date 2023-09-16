@@ -44,7 +44,7 @@ def predict(predictions_folder: str, output_folder):
             gt_segmentation = torch.tensor(np.array(f["segmentation_arr"]), dtype=torch.bool, device=config.device)
         gt_segmentation[..., 2] = torch.logical_or(gt_segmentation[..., 2], gt_segmentation[..., 3])
         gt_segmentation[..., 3] = gt_segmentation[..., 4]
-        gt_segmentation = gt_segmentation[..., :4]
+        gt_segmentation = gt_segmentation[..., :4].permute(0, 3, 1, 2)
 
         gt_image = torch.any(gt_segmentation, dim=0).to(torch.long)
         gt_slice = torch.any(torch.any(gt_segmentation, dim=-1), dim=-1).to(torch.long)
@@ -54,7 +54,7 @@ def predict(predictions_folder: str, output_folder):
         for i in range(4):
             if slice_preds.iloc[i]["found"]:
                 slice_preds_array[slice_preds.iloc[i]["left"]:slice_preds.iloc[i]["right"], i] = True
-        slice_preds_array = torch.tensor(slice_preds_array, dtype=torch.bool, device=config.device)
+        slice_preds_array = torch.tensor(slice_preds_array, dtype=torch.long, device=config.device)
 
         with h5py.File(os.path.join(predictions_folder, str(series_id) + ".hdf5"), "r") as f:
             image_preds = f["organ_location"][()]
