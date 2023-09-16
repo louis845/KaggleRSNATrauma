@@ -93,7 +93,7 @@ def predict(predictions_folder: str, output_folder):
 
 def validate_folder_preds_full(data: list, predictions_folder: str):
     for patient_id in data:
-        patient_folder = os.path.join("data_hdf5_cropped", patient_id)
+        patient_folder = os.path.join("data_hdf5_cropped", str(patient_id))
         for series_id in os.listdir(patient_folder):
             assert os.path.isfile(os.path.join(predictions_folder, series_id + ".hdf5")), "Missing prediction for series " + series_id
             assert os.path.isfile(os.path.join(predictions_folder, series_id + ".csv")), "Missing prediction for series " + series_id
