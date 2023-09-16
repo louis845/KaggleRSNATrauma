@@ -123,3 +123,13 @@ if __name__ == "__main__":
     os.makedirs(train_out_folder)
     validate_folder_preds_full(train_data, train_preds_folder)
     predict(train_preds_folder, out_folder)
+
+    # eval on validation set
+    print("Eval on validation set")
+    val_preds_folder = os.path.join(folder, val_data_name)
+    val_out_folder = os.path.join(out_folder, val_data_name)
+    if os.path.isdir(val_out_folder):
+        shutil.rmtree(val_out_folder)
+    os.makedirs(val_out_folder)
+    validate_folder_preds_full(val_data, val_preds_folder)
+    predict(val_preds_folder, out_folder)
