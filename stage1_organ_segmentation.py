@@ -61,6 +61,7 @@ class OrganSegmentator():
         self.z_positions = None
         self.is_flipped = False
         self.data_loaded = False
+        self.data_is_cached = False
         self.loaded_data_H = None
         self.loaded_data_W = None
 
@@ -70,7 +71,7 @@ class OrganSegmentator():
         self.model.eval()
         self.model_loaded = True
 
-    def load_data(self, ct_3d_volume_path: str, z_positions_path: str):
+    def load_data(self, ct_3d_volume_path: str, z_positions_path: str, cache_data = True):
         if self.data_loaded:
             self.close()
         self.ct_3d_volume = h5py.File(ct_3d_volume_path, "r")
@@ -79,6 +80,20 @@ class OrganSegmentator():
         self.data_loaded = True
         self.loaded_data_H = self.ct_3d_volume["ct_3D_image"].shape[-2]
         self.loaded_data_W = self.ct_3d_volume["ct_3D_image"].shape[-1]
+
+        self.data_is_cached = cache_data
+        if cache_data:
+            ct_3d_volume = self.ct_3d_volume["ct_3D_image"][()]
+            self.ct_3d_volume.close()
+            self.ct_3d_volume = ct_3d_volume
+
+    def close(self):
+        if self.data_loaded:
+            if not self.data_is_cached:
+                self.ct_3d_volume.close()
+            self.ct_3d_volume = None
+            self.z_positions = None
+            self.data_loaded = False
 
     def get_resize_strategy(self):
         assert self.data_loaded, "Please load the data first."
@@ -113,13 +128,6 @@ class OrganSegmentator():
             }
         return resize_strategy
 
-    def close(self):
-        if self.data_loaded:
-            self.ct_3d_volume.close()
-            self.ct_3d_volume = None
-            self.z_positions = None
-            self.data_loaded = False
-
     def find_min_max_slice_idxs(self, stride_mm: int=5, depth: int=9):
         assert self.data_loaded, "Please load the data first."
         assert depth % 2 == 1, "depth must be an odd number"
@@ -138,21 +146,26 @@ class OrganSegmentator():
             max_slice_idx, min_slice_idx = min_slice_idx, max_slice_idx
         return min_slice_idx, max_slice_idx
 
-    def load_local_features(self, slice_idx, stride_mm: int=5, depth: int=9):
+    def get_nearest_slice_indices(self, slice_idx, stride_mm: int=5, depth: int=9):
         assert self.data_loaded, "Please load the data first."
         assert depth % 2 == 1, "depth must be an odd number"
         depth_radius = (depth - 1) // 2
 
         current_zpos = self.z_positions[slice_idx]
-        expected_zposes = np.arange(current_zpos - depth_radius * stride_mm, current_zpos + (depth_radius + 1) * stride_mm, stride_mm)
+        expected_zposes = np.arange(current_zpos - depth_radius * stride_mm,
+                                    current_zpos + (depth_radius + 1) * stride_mm, stride_mm)
 
         # find nearest slice indices for the given z positions
         if self.is_flipped:
             nearest_slice_indices = find_closest(self.z_positions, expected_zposes)
         else:
             nearest_slice_indices = (self.z_positions.shape[0] - 1 -
-                                        find_closest(self.z_positions[::-1], expected_zposes))[::-1]
+                                     find_closest(self.z_positions[::-1], expected_zposes))[::-1]
         nearest_slice_indices[depth_radius] = slice_idx
+        return nearest_slice_indices
+
+    def load_local_features(self, slice_idx, stride_mm: int=5, depth: int=9):
+        nearest_slice_indices = self.get_nearest_slice_indices(slice_idx, stride_mm, depth)
 
         # load from the h5py file
         collapsed_nearest_indices, repeats = consecutive_repeats(nearest_slice_indices)
@@ -162,14 +175,25 @@ class OrganSegmentator():
             local_slice_image = local_slice_image[::-1, ...].copy()
         return local_slice_image
 
+    def load_image_from_slice_indices(self, slice_idxs: np.ndarray, stride_mm: int=5, depth: int=9):
+        if self.data_is_cached:
+            indices = np.stack([self.get_nearest_slice_indices(slice_idxs[k], stride_mm, depth) for k in range(len(slice_idxs))],
+                                 axis=0) # (batch_size, depth)
+            assert indices.shape == (len(slice_idxs), depth)
+            batch_volume = self.ct_3d_volume[np.expand_dims(indices, axis=1), ...]
+            assert batch_volume.shape[:3] == (len(slice_idxs), 1, depth)
+            return torch.tensor(batch_volume, dtype=torch.float32, device=self.device)
+        else:
+            return torch.stack([
+                torch.tensor(self.load_local_features(slice_idxs[k], stride_mm, depth), dtype=torch.float32,
+                             device=self.device) for k in range(len(slice_idxs))], dim=0).unsqueeze(1)
+
     def predict_at_locations(self, slice_idxs: np.ndarray, stride_mm: int=5, depth: int=9):
         assert self.model_loaded, "Please load the model checkpoint first."
         assert self.data_loaded, "Please load the data first."
         assert depth % 2 == 1, "depth must be an odd number"
 
-        image_tensor = torch.stack([
-                    torch.tensor(self.load_local_features(slice_idxs[k], stride_mm, depth), dtype=torch.float32,
-                             device=self.device) for k in range(len(slice_idxs))], dim=0).unsqueeze(1)
+        image_tensor = self.load_image_from_slice_indices(slice_idxs, stride_mm, depth)
         # the shape should be (batch_size, 1, D, H, W)
         assert image_tensor.shape == (len(slice_idxs), 1, depth, self.loaded_data_H, self.loaded_data_W)
 
@@ -215,6 +239,7 @@ class OrganSegmentator():
             organ_location: np.ndarray of shape (4, H, W), type int, representing the rough prediction of location of the organ
         """
         assert self.model_loaded, "Please load the model checkpoint first."
+        assert batch_size >= 8, "batch_size must be at least 8"
         self.load_data(ct_3d_volume_path, z_positions_path)
         min_slice_idx, max_slice_idx = self.find_min_max_slice_idxs()
         # the variables below are used to store the results
@@ -276,37 +301,50 @@ class OrganSegmentator():
                             organ_right_bounds[k, 1] = min(pred_right_suggestions[0], organ_right_bounds[k, 1])
 
             # make new predictions
-            pred_suggestions = np.zeros(shape=(batch_size,), dtype=np.int32)
-            idx = 0
-            for k in range(4): # for each organ first
+            pred_suggestions = np.full(shape=(batch_size,), fill_value=-1, dtype=np.int32)
+            completed_organs = found_organs & (organ_left_bounds[:, 0] >= organ_left_bounds[:, 1] - 1) & (organ_right_bounds[:, 0] >= organ_right_bounds[:, 1] - 1)
+            num_organs_to_predict = np.sum(~completed_organs)
+
+            allocate_prediction = np.linspace(0, batch_size, num=num_organs_to_predict + 1, dtype=np.int32)
+            organ_alloc = 0
+
+            for k in range(4): # for each organ, if not completed
+                if completed_organs[k]:
+                    continue
+                # allocation of indices to predict for the organ
+                organ_alloc_min, organ_alloc_max = allocate_prediction[organ_alloc], allocate_prediction[organ_alloc + 1]
+                organ_alloc += 1
+
                 if found_organs[k]: # if the organ is found, we search for the middle slice
-                    if organ_left_bounds[k, 0] < organ_left_bounds[k, 1] - 1:
-                        pred_suggestions[idx] = (organ_left_bounds[k, 0] + organ_left_bounds[k, 1]) // 2
-                        idx += 1
-                        if idx >= batch_size:
-                            break
-                    if organ_right_bounds[k, 0] < organ_right_bounds[k, 1] - 1:
-                        pred_suggestions[idx] = (organ_right_bounds[k, 0] + organ_right_bounds[k, 1]) // 2
-                        idx += 1
-                        if idx >= batch_size:
-                            break
-            # if some organs are still not found
-            if not np.all(found_organs):
-                while idx < batch_size:
-                    # add the middle of maximum gaps between searched slices
+                    left_required = organ_left_bounds[k, 0] < organ_left_bounds[k, 1] - 1
+                    right_required = organ_right_bounds[k, 0] < organ_right_bounds[k, 1] - 1
+                    if left_required and right_required:
+                        alloc_mid_split = (organ_alloc_min + organ_alloc_max) // 2
+                        pred_suggestions[organ_alloc_min:alloc_mid_split] = np.linspace(organ_left_bounds[k, 0], organ_left_bounds[k, 1],
+                                                                                        num=alloc_mid_split - organ_alloc_min + 2, dtype=np.int32)[1:-1]
+                        pred_suggestions[alloc_mid_split:organ_alloc_max] = np.linspace(organ_right_bounds[k, 0], organ_right_bounds[k, 1],
+                                                                                        num=organ_alloc_max - alloc_mid_split + 2, dtype=np.int32)[1:-1]
+                    elif left_required:
+                        pred_suggestions[organ_alloc_min:organ_alloc_max] = np.linspace(organ_left_bounds[k, 0], organ_left_bounds[k, 1],
+                                                                                        num=organ_alloc_max - organ_alloc_min + 2, dtype=np.int32)[1:-1]
+                    elif right_required:
+                        pred_suggestions[organ_alloc_min:organ_alloc_max] = np.linspace(organ_right_bounds[k, 0], organ_right_bounds[k, 1],
+                                                                                        num=organ_alloc_max - organ_alloc_min + 2, dtype=np.int32)[1:-1]
+                else:
+                    # if the organ is not found, we add the middle of the maximum gaps between searched slices
                     searched_locs = np.argwhere(searched_slices).squeeze(-1)
                     gap_lengths = np.diff(searched_locs)
                     max_gap_idx = np.argmax(gap_lengths)
                     if gap_lengths[max_gap_idx] >= min_gap:
-                        pred_suggestions[idx] = (searched_locs[max_gap_idx] + gap_lengths[max_gap_idx] // 2) + min_slice_idx
-                        searched_slices[pred_suggestions[idx] - min_slice_idx] = True
-                        idx += 1
-                    else:
-                        break
+                        pred_suggestions[organ_alloc_min:organ_alloc_max] = np.linspace(searched_locs[max_gap_idx], searched_locs[max_gap_idx]
+                                                                                        + gap_lengths[max_gap_idx], num=organ_alloc_max - organ_alloc_min + 2,
+                                                                                        dtype=np.int32)[1:-1] + min_slice_idx
+                searched_slices[pred_suggestions[organ_alloc_min:organ_alloc_max] - min_slice_idx] = True
             # terminate if no more predictions are needed
-            if idx == 0:
+            suggest_locs = pred_suggestions != -1
+            if suggest_locs.sum() == 0:
                 break
-            pred_suggestions = np.unique(pred_suggestions[:idx])
+            pred_suggestions = np.unique(pred_suggestions[suggest_locs])
 
         left = np.sum(organ_left_bounds, axis=-1) // 2
         right = np.sum(organ_right_bounds, axis=-1) // 2
