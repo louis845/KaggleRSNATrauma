@@ -5,6 +5,7 @@ import pydicom
 import nibabel
 import numpy as np
 import cv2
+os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH")
 import h5py
 import pandas as pd
 
