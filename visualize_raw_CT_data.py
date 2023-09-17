@@ -31,6 +31,19 @@ def convert_segmentation_to_color(segmentation_image: np.ndarray) -> np.ndarray:
     hsv_image = np.stack([hue, saturation, value], axis=-1)
     return hsv_image
 
+def convert_kidney_collapsed_segmentation_to_color(segmentation_image: np.ndarray) -> list[np.ndarray]:
+    """Convert a segmentation image to color, in hsv format"""
+    images = []
+    for k in range(4):
+        organpred_slice = segmentation_image[k, :, :]
+        hue = (255.0 * (k + 1) * organpred_slice.astype(np.float32) / 5.0).astype(np.uint8)
+        saturation = (organpred_slice > 0).astype(np.uint8) * 255
+        value = (organpred_slice > 0).astype(np.uint8) * 255
+        hsv_image = np.stack([hue, saturation, value], axis=-1)
+
+        images.append(hsv_image)
+    return images
+
 def collapse_segmentation(segmentation_image: np.ndarray) -> np.ndarray:
     return np.stack([
         segmentation_image[..., 0],
@@ -214,6 +227,7 @@ class RawCTViewer(QMainWindow):
         self.ct_3D_image = None
         self.z_positions = None
         self.segmentation_image = None
+        self.pred_segmentation_image = None
         self.min_series = None
         self.max_series = None
 
@@ -355,6 +369,7 @@ class RawCTViewer(QMainWindow):
 
         self.ct_3D_image = None
         self.segmentation_image = None
+        self.pred_segmentation_image = None
         self.slice_info_renderer.gt_organ_slice_info = None
         self.slice_info_renderer.pred_organ_slice_info = None
 
@@ -473,7 +488,10 @@ class RawCTViewer(QMainWindow):
             if os.path.isfile(os.path.join(pred_series_folder, series_id + ".csv")):
                 self.slice_info_renderer.pred_organ_slice_info = OrgansSliceInfo()
                 self.slice_info_renderer.pred_organ_slice_info.load_from_csv(os.path.join(pred_series_folder, series_id + ".csv"))
-
+            if os.path.isfile(os.path.join(pred_series_folder, series_id + ".hdf5")):
+                with h5py.File(os.path.join(pred_series_folder, series_id + ".hdf5"), "r") as f:
+                    pred_segmentation_image = f["organ_location"][()]
+                self.pred_segmentation_image = convert_kidney_collapsed_segmentation_to_color(pred_segmentation_image)
 
         # Update the slider and the renderer
         self.slice_number_slider.setRange(min_slice, max_slice)
@@ -503,19 +521,23 @@ class RawCTViewer(QMainWindow):
                 self.fig.set_size_inches(image.shape[1] / 100, image.shape[0] / 100)
                 self.fig.add_subplot(1, 1, 1).imshow(image, cmap="gray")
             else:
-                ax_ct = self.fig.add_subplot(1, 4, 1)
+                if self.pred_segmentation_image is None:
+                    plots = [1, 4]
+                else:
+                    plots = [2, 4]
+                ax_ct = self.fig.add_subplot(tuple(plots + [1]))
                 ax_ct.imshow(image, cmap="gray")
 
                 seg_img = self.segmentation_image[slice_number - self.min_series, ...]
                 seg_img = cv2.cvtColor(seg_img, cv2.COLOR_HSV2RGB)
-                ax_seg = self.fig.add_subplot(1, 4, 2)
+                ax_seg = self.fig.add_subplot(tuple(plots + [2]))
                 ax_seg.imshow(seg_img)
 
-                ax_overlay = self.fig.add_subplot(1, 4, 3)
+                ax_overlay = self.fig.add_subplot(tuple(plots + [3]))
                 ax_overlay.imshow(image, cmap="gray")
                 ax_overlay.imshow(seg_img, alpha=0.5)
 
-                ax_colors = self.fig.add_subplot(1, 4, 4)
+                ax_colors = self.fig.add_subplot(tuple(plots + [4]))
                 color_image = np.zeros((self.segmentation_image.shape[0], self.segmentation_image.shape[1]), dtype=np.uint8)
                 color_image[:1 * self.segmentation_image.shape[0] // 5, :] = 1
                 color_image[1 * self.segmentation_image.shape[0] // 5:2 * self.segmentation_image.shape[0] // 5, :] = 2
@@ -526,7 +548,16 @@ class RawCTViewer(QMainWindow):
                 color_image = cv2.cvtColor(color_image, cv2.COLOR_HSV2RGB)
                 ax_colors.imshow(color_image)
 
-                self.fig.set_size_inches(image.shape[1] / 100 * 4, image.shape[0] / 100)
+                if self.pred_segmentation_image is None:
+                    self.fig.set_size_inches(image.shape[1] / 100 * 4, image.shape[0] / 100)
+                else:
+                    for k in range(4):
+                        seg_img = self.pred_segmentation_image[k]
+                        seg_img = cv2.cvtColor(seg_img, cv2.COLOR_HSV2RGB)
+                        ax_overlay = self.fig.add_subplot(tuple(plots + [k + 5]))
+                        ax_overlay.imshow(image, cmap="gray")
+                        ax_overlay.imshow(seg_img, alpha=0.5)
+                    self.fig.set_size_inches(image.shape[1] / 100 * 4, image.shape[0] / 100 * 2)
 
 
             self.image_canvas.draw()
@@ -541,3 +572,4 @@ if __name__ == "__main__":
     window = RawCTViewer()
     window.show()
     app.exec_()
+
