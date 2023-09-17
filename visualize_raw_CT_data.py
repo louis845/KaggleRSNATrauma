@@ -21,7 +21,6 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import multiprocessing
 import scan_preprocessing
 import image_sampler
-import image_sampler_async
 
 def convert_segmentation_to_color(segmentation_image: np.ndarray) -> np.ndarray:
     """Convert a segmentation image to color, in hsv format"""
@@ -110,10 +109,12 @@ class SliceOrganRenderer(QWidget):
 
                 # set color
                 hsv_color = getHSVColor(organ_index)
+                rgb_color = tuple(cv2.cvtColor(np.array([[list(hsv_color)]], dtype=np.uint8), cv2.COLOR_HSV2RGB).flatten())
                 painter.setPen(Qt.NoPen)
                 # convert HSV to RGB and set color
                 color = QColor()
-                color.setHsv(hsv_color[0], hsv_color[1], hsv_color[2])
+                color.setRgb(rgb_color[0], rgb_color[1], rgb_color[2])
+
                 painter.setBrush(color)
 
                 # draw rectangle
@@ -244,9 +245,6 @@ class RawCTViewer(QMainWindow):
 
         # Set the layout of the main panel
         self.main_panel.setLayout(self.main_panel_layout)
-
-        # Create an async image sampler
-        self.async_loader = image_sampler_async.ImageLoaderWorker("async_loader")
 
     def setup_folders(self):
         self.patient_ids = os.listdir(self.ct_folder)
@@ -419,12 +417,8 @@ class RawCTViewer(QMainWindow):
             self.min_series, self.max_series = 0, 14
             min_slice, max_slice = 0, 14
         elif self.image_options.currentText() == "hdf5_sampler_async":
-            print("Loading HDF5 sampler async...")
-            self.async_loader.request_load_image({"patient_id": patient_id, "series_id": series_id, "slices_random": True, "augmentation": True})
-            self.ct_3D_image = self.async_loader.get_requested_image()
-            self.z_positions = np.zeros((15,), dtype=np.float32)
-            self.min_series, self.max_series = 0, 14
-            min_slice, max_slice = 0, 14
+            print("Unsupported.")
+            return
 
 
         # Update the slider and the renderer
@@ -481,7 +475,7 @@ class RawCTViewer(QMainWindow):
             self.image_canvas.draw()
 
     def closeEvent(self, event):
-        self.async_loader.terminate()
+        pass
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
