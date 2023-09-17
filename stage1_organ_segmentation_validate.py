@@ -31,10 +31,21 @@ def predict(predictions_folder: str, output_folder):
 
     entrywise_preds = {
         "slice_iou": [],
+        "slice_accuracy": [],
+        "slice_precision": [],
+        "slice_recall": [],
         "image_accuracy": [],
         "image_precision": [],
         "image_recall": [],
     }
+    for organ in organs:
+        entrywise_preds["slice_iou_" + organ] = []
+        entrywise_preds["slice_accuracy_" + organ] = []
+        entrywise_preds["slice_precision_" + organ] = []
+        entrywise_preds["slice_recall_" + organ] = []
+        entrywise_preds["image_accuracy_" + organ] = []
+        entrywise_preds["image_precision_" + organ] = []
+        entrywise_preds["image_recall_" + organ] = []
 
     for series_id in tqdm.tqdm(predictions):
         gt_segmentation_file = os.path.join(manager_segmentations.EXPERT_SEGMENTATION_FOLDER, str(series_id) + ".hdf5")
@@ -73,11 +84,33 @@ def predict(predictions_folder: str, output_folder):
         temp_imagewise_metrics.add(image_preds, gt_image)
 
         iou_slicewise = temp_slicewise_metrics.get_iou()
+        slice_accuracy, slice_precision, slice_recall = temp_slicewise_metrics.get()
         accuracy, precision, recall = temp_imagewise_metrics.get()
         entrywise_preds["slice_iou"].append(iou_slicewise)
+        entrywise_preds["slice_accuracy"].append(slice_accuracy)
+        entrywise_preds["slice_precision"].append(slice_precision)
+        entrywise_preds["slice_recall"].append(slice_recall)
         entrywise_preds["image_accuracy"].append(accuracy)
         entrywise_preds["image_precision"].append(precision)
         entrywise_preds["image_recall"].append(recall)
+
+        for i, organ in enumerate(organs):
+            temp_slicewise_metrics = metrics.BinaryMetrics("temp_slicewise")
+            temp_imagewise_metrics = metrics.BinaryMetrics("temp_imagewise")
+            temp_slicewise_metrics.add(slice_preds_array[:, i], gt_slice[:, i])
+            temp_imagewise_metrics.add(image_preds[i, ...], gt_image[i, ...])
+
+            iou_slicewise = temp_slicewise_metrics.get_iou()
+            slice_accuracy, slice_precision, slice_recall = temp_slicewise_metrics.get()
+            accuracy, precision, recall = temp_imagewise_metrics.get()
+
+            entrywise_preds["slice_iou_" + organ].append(iou_slicewise)
+            entrywise_preds["slice_accuracy_" + organ].append(slice_accuracy)
+            entrywise_preds["slice_precision_" + organ].append(slice_precision)
+            entrywise_preds["slice_recall_" + organ].append(slice_recall)
+            entrywise_preds["image_accuracy_" + organ].append(accuracy)
+            entrywise_preds["image_precision_" + organ].append(precision)
+            entrywise_preds["image_recall_" + organ].append(recall)
 
     # save entrywise predictions
     pd.DataFrame(entrywise_preds, index=predictions).to_csv(os.path.join(output_folder, "entrywise_preds.csv"))
@@ -122,7 +155,7 @@ if __name__ == "__main__":
         shutil.rmtree(train_out_folder)
     os.makedirs(train_out_folder)
     validate_folder_preds_full(train_data, train_preds_folder)
-    predict(train_preds_folder, out_folder)
+    predict(train_preds_folder, train_out_folder)
 
     # eval on validation set
     print("Eval on validation set")
@@ -132,4 +165,4 @@ if __name__ == "__main__":
         shutil.rmtree(val_out_folder)
     os.makedirs(val_out_folder)
     validate_folder_preds_full(val_data, val_preds_folder)
-    predict(val_preds_folder, out_folder)
+    predict(val_preds_folder, val_out_folder)
