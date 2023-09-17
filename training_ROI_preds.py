@@ -162,23 +162,23 @@ def training_step(record: bool):
                 is_expert = False
                 seg_folder = manager_segmentations.TSM_SEGMENTATION_FOLDER
             if use_async_sampler:
-                slices, segmentations, _ = image_ROI_sampler_async.load_image(patient_id, series_id,
+                slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id,
                                                                            segmentation_folder=seg_folder,
                                                                            slices_random=not disable_random_slices,
                                                                            translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                                            elastic_augmentation=not disable_elastic_augmentation,
+                                                                           boundary_augmentation=use_boundary_augmentation,
                                                                            slices=num_slices,
-                                                                           segmentation_region_depth=5 if use_3d_prediction else 1,
-                                                                           injury_labels_depth=-1)
+                                                                           segmentation_region_depth=5 if use_3d_prediction else 1,)
             else:
-                slices, segmentations, _ = image_ROI_sampler.load_image(patient_id, series_id,
+                slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id,
                                                                      segmentation_folder=seg_folder,
                                                                      slices_random=not disable_random_slices,
                                                                      translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                                      elastic_augmentation=not disable_elastic_augmentation,
+                                                                     boundary_augmentation=use_boundary_augmentation,
                                                                      slices=num_slices,
-                                                                     segmentation_region_depth=5 if use_3d_prediction else 1,
-                                                                     injury_labels_depth=-1)
+                                                                     segmentation_region_depth=5 if use_3d_prediction else 1)
 
             loss, tp_per_class, tn_per_class, fp_per_class, \
                 fn_per_class, loss_per_class = single_training_step_compile(model, optimizer, slices, segmentations,
@@ -232,23 +232,23 @@ def validation_step():
                     series_id = str(manager_segmentations.randomly_pick_TSM_segmentation(patient_id))
                     seg_folder = manager_segmentations.TSM_SEGMENTATION_FOLDER
                 if use_async_sampler:
-                    slices, segmentations, _ = image_ROI_sampler_async.load_image(patient_id, series_id,
+                    slices, segmentations = image_ROI_sampler_async.load_image(patient_id, series_id,
                                                                                segmentation_folder=seg_folder,
                                                                                slices_random=False,
                                                                                translate_rotate_augmentation=False,
                                                                                elastic_augmentation=False,
+                                                                               boundary_augmentation=False,
                                                                                slices=num_slices,
-                                                                               segmentation_region_depth=5 if use_3d_prediction else 1,
-                                                                               injury_labels_depth=-1)
+                                                                               segmentation_region_depth=5 if use_3d_prediction else 1)
                 else:
-                    slices, segmentations, _ = image_ROI_sampler.load_image(patient_id, series_id,
+                    slices, segmentations = image_ROI_sampler.load_image(patient_id, series_id,
                                                                          segmentation_folder=seg_folder,
                                                                          slices_random=False,
                                                                          translate_rotate_augmentation=False,
                                                                          elastic_augmentation=False,
+                                                                         boundary_augmentation=False,
                                                                          slices=num_slices,
-                                                                         segmentation_region_depth=5 if use_3d_prediction else 1,
-                                                                         injury_labels_depth=-1)
+                                                                         segmentation_region_depth=5 if use_3d_prediction else 1)
 
                 loss, tp_per_class, tn_per_class, fp_per_class, \
                     fn_per_class, loss_per_class = single_validation_step(model, slices, segmentations)
@@ -302,6 +302,8 @@ if __name__ == "__main__":
                         help="Whether to disable rotation and translation augmentation. Default False.")
     parser.add_argument("--disable_elastic_augmentation", action="store_true",
                         help="Whether to disable elastic augmentation. Default False.")
+    parser.add_argument("--use_boundary_augmentation", action="store_true",
+                        help="Whether to use boundary augmentation. Default False.")
     parser.add_argument("--num_slices", type=int, default=15, help="Number of slices to use. Default 15.")
     parser.add_argument("--optimizer", type=str, default="adam",
                         help="Which optimizer to use. Available options: adam, sgd. Default adam.")
@@ -387,6 +389,7 @@ if __name__ == "__main__":
     disable_random_slices = args.disable_random_slices
     disable_rotpos_augmentation = args.disable_rotpos_augmentation
     disable_elastic_augmentation = args.disable_elastic_augmentation
+    use_boundary_augmentation = args.use_boundary_augmentation
     num_slices = args.num_slices
     optimizer_type = args.optimizer
     epochs_per_save = args.epochs_per_save
@@ -494,6 +497,7 @@ if __name__ == "__main__":
         "disable_random_slices": disable_random_slices,
         "disable_rotpos_augmentation": disable_rotpos_augmentation,
         "disable_elastic_augmentation": disable_elastic_augmentation,
+        "use_boundary_augmentation": use_boundary_augmentation,
         "num_slices": num_slices,
         "optimizer": optimizer_type,
         "epochs_per_save": epochs_per_save,
