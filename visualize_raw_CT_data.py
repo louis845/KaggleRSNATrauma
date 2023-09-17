@@ -140,7 +140,7 @@ class SliceOrganRenderer(QWidget):
 
         # find a QFont such that the height is equal to y_spacing
         font = painter.font()
-        font.setPointSizeF(y_spacing / 2)
+        font.setPointSizeF(y_spacing / 3)
         painter.setFont(font)
         
         organs = ["liver", "spleen", "kidney", "bowel"]
@@ -254,6 +254,10 @@ class RawCTViewer(QMainWindow):
         # Create a dropdown to toggle between dicom, rescaled_dicom, and npy
         self.image_options = QComboBox()
         self.image_options.addItems(["dicom", "rescaled_dicom", "npy", "hdf5", "hdf5_cropped", "hdf5_sampler", "hdf5_sampler_async"])
+        # Create a dropdown to select the predicted slice series
+        self.pred_series_options = QComboBox()
+        preds = os.listdir("stage1_organ_segmentator_eval") if os.path.isdir("stage1_organ_segmentator_eval") else []
+        self.pred_series_options.addItems(["None"] + preds)
         # Create a matplotlib canvas to display the image
         self.fig = plt.figure()
         self.image_canvas = FigureCanvas(self.fig)
@@ -276,6 +280,7 @@ class RawCTViewer(QMainWindow):
         # Add the slider and label to the main panel
         self.main_panel_layout = QVBoxLayout()
         self.main_panel_layout.addWidget(self.image_options)
+        self.main_panel_layout.addWidget(self.pred_series_options)
         self.main_panel_layout.addWidget(self.image_canvas)
         self.main_panel_layout.addWidget(self.slice_info_renderer)
         self.main_panel_layout.addWidget(self.slice_number_label)
@@ -352,6 +357,8 @@ class RawCTViewer(QMainWindow):
         self.segmentation_image = None
         self.slice_info_renderer.gt_organ_slice_info = None
         self.slice_info_renderer.pred_organ_slice_info = None
+
+        need_series = False
         # Load the data
         if self.image_options.currentText() == "dicom":
             print("Loading DICOM data...")
@@ -441,6 +448,7 @@ class RawCTViewer(QMainWindow):
                     self.slice_info_renderer.gt_organ_slice_info.set_from_segmentation(collapse_segmentation(segmentation_3D_image))
                     self.segmentation_image = convert_segmentation_to_color(np.any(segmentation_3D_image, axis=-1) * (np.argmax(segmentation_3D_image, axis=-1) + 1))
                     assert segmentation_3D_image.shape[:3] == self.ct_3D_image.shape
+                    need_series = True
                 elif os.path.isfile(os.path.join(self.generated_segmentations_cropped_folder, series_id + ".hdf5")):
                     with h5py.File(os.path.join(self.generated_segmentations_cropped_folder, series_id + ".hdf5"), "r") as f:
                         segmentation_3D_image = f["segmentation_arr"][()]
@@ -448,6 +456,7 @@ class RawCTViewer(QMainWindow):
                     self.slice_info_renderer.gt_organ_slice_info.set_from_segmentation(collapse_segmentation(segmentation_3D_image))
                     self.segmentation_image = convert_segmentation_to_color(np.any(segmentation_3D_image, axis=-1) * (np.argmax(segmentation_3D_image, axis=-1) + 1))
                     assert segmentation_3D_image.shape[:3] == self.ct_3D_image.shape
+                    need_series = True
         elif self.image_options.currentText() == "hdf5_sampler":
             print("Loading HDF5 sampler data...")
             self.ct_3D_image = image_sampler.load_image(patient_id, series_id, slices_random=True, augmentation=True)
@@ -457,6 +466,13 @@ class RawCTViewer(QMainWindow):
         elif self.image_options.currentText() == "hdf5_sampler_async":
             print("Unsupported.")
             return
+
+        # Load predicted series if available
+        if need_series and self.pred_series_options.currentText() != "None":
+            pred_series_folder = os.path.join("stage1_organ_segmentator_eval", self.pred_series_options.currentText())
+            if os.path.isfile(os.path.join(pred_series_folder, series_id + ".csv")):
+                self.slice_info_renderer.pred_organ_slice_info = OrgansSliceInfo()
+                self.slice_info_renderer.pred_organ_slice_info.load_from_csv(os.path.join(pred_series_folder, series_id + ".csv"))
 
 
         # Update the slider and the renderer
