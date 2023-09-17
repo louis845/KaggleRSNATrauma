@@ -256,7 +256,7 @@ class RawCTViewer(QMainWindow):
         self.image_options.addItems(["dicom", "rescaled_dicom", "npy", "hdf5", "hdf5_cropped", "hdf5_sampler", "hdf5_sampler_async"])
         # Create a dropdown to select the predicted slice series
         self.pred_series_options = QComboBox()
-        preds = os.listdir("stage1_organ_segmentator_eval") if os.path.isdir("stage1_organ_segmentator_eval") else []
+        preds = os.listdir("stage1_organ_segmentator") if os.path.isdir("stage1_organ_segmentator") else []
         self.pred_series_options.addItems(["None"] + preds)
         # Create a matplotlib canvas to display the image
         self.fig = plt.figure()
@@ -469,7 +469,7 @@ class RawCTViewer(QMainWindow):
 
         # Load predicted series if available
         if need_series and self.pred_series_options.currentText() != "None":
-            pred_series_folder = os.path.join("stage1_organ_segmentator_eval", self.pred_series_options.currentText())
+            pred_series_folder = os.path.join("stage1_organ_segmentator", self.pred_series_options.currentText())
             if os.path.isfile(os.path.join(pred_series_folder, series_id + ".csv")):
                 self.slice_info_renderer.pred_organ_slice_info = OrgansSliceInfo()
                 self.slice_info_renderer.pred_organ_slice_info.load_from_csv(os.path.join(pred_series_folder, series_id + ".csv"))
@@ -483,6 +483,9 @@ class RawCTViewer(QMainWindow):
 
         # Update the image
         self.update_image()
+
+        # Update the renderer
+        self.slice_info_renderer.update()
 
         # Show dialog with message "CT scan loaded, Series {}, Patient {}".format(series_id, patient_id)
         QMessageBox.information(self, "CT scan loaded", "CT scan loaded, Series {}, Patient {}".format(series_id, patient_id))
