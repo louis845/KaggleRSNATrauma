@@ -147,6 +147,10 @@ class OrganSegmentator():
         return min_slice_idx, max_slice_idx
 
     def get_nearest_slice_indices(self, slice_idx, stride_mm: int=5, depth: int=9):
+        """
+        Same as the implementation in image_ROI_sampler. This is included here to
+        avoid importing the other packages used by image_ROI_sampler for shipping.
+        """
         assert self.data_loaded, "Please load the data first."
         assert depth % 2 == 1, "depth must be an odd number"
         depth_radius = (depth - 1) // 2
@@ -166,6 +170,7 @@ class OrganSegmentator():
 
     def load_local_features(self, slice_idx, stride_mm: int=5, depth: int=9):
         nearest_slice_indices = self.get_nearest_slice_indices(slice_idx, stride_mm, depth)
+        nearest_slice_indices = np.clip(nearest_slice_indices, 0, self.z_positions.shape[0] - 1)
 
         # load from the h5py file
         collapsed_nearest_indices, repeats = consecutive_repeats(nearest_slice_indices)
@@ -177,8 +182,9 @@ class OrganSegmentator():
 
     def load_image_from_slice_indices(self, slice_idxs: np.ndarray, stride_mm: int=5, depth: int=9):
         if self.data_is_cached:
-            indices = np.stack([self.get_nearest_slice_indices(slice_idxs[k], stride_mm, depth) for k in range(len(slice_idxs))],
-                                 axis=0) # (batch_size, depth)
+            indices = np.stack([np.clip(self.get_nearest_slice_indices(slice_idxs[k], stride_mm, depth), 0,
+                                        self.z_positions.shape[0] - 1)
+                                for k in range(len(slice_idxs))], axis=0) # (batch_size, depth)
             assert indices.shape == (len(slice_idxs), depth)
             batch_volume = self.ct_3d_volume[np.expand_dims(indices, axis=1), ...]
             assert batch_volume.shape[:3] == (len(slice_idxs), 1, depth)
@@ -241,7 +247,8 @@ class OrganSegmentator():
         assert self.model_loaded, "Please load the model checkpoint first."
         assert batch_size >= 8, "batch_size must be at least 8"
         self.load_data(ct_3d_volume_path, z_positions_path)
-        min_slice_idx, max_slice_idx = self.find_min_max_slice_idxs()
+        # min_slice_idx, max_slice_idx = self.find_min_max_slice_idxs()
+        min_slice_idx, max_slice_idx = 0, self.z_positions.shape[0] - 1 # use all slices
         # the variables below are used to store the results
         found_organs = np.full(shape=(4,), fill_value=False, dtype=bool)
         organ_left_bounds = np.full(shape=(4, 2), fill_value=min_slice_idx, dtype=np.int32)

@@ -8,8 +8,16 @@ while true; do
     sleep 10
 done
 
+# main training
 python training_ROI_preds.py --learning_rate 3e-4 --momentum 0.99 --num_extra_nonexpert_training 80 --model ROI_stage1_fold3 --device 1 --epochs 36 --num_extra_steps 14 --train_data ROI_classifier_fold2_train --val_data ROI_classifier_fold2_val --num_slices 9 --hidden_blocks 1 2 6 8 19 4 --use_async_sampler
+# fine tune on boundary
+python training_ROI_preds.py --learning_rate 3e-4 --momentum 0.99 --num_extra_nonexpert_training 80 --model ROI_stage1_boundary_fold3 --device 1 --epochs 12 --num_extra_steps 14 --train_data ROI_classifier_fold2_train --val_data ROI_classifier_fold2_val --num_slices 9 --hidden_blocks 1 2 6 8 19 4 --use_boundary_augmentation --use_async_sampler --load_model ROI_stage1_fold3
 # validation dataset
-python stage1_organ_segmentation.py --model ROI_stage1_fold3 --device 1 --dataset ROI_classifier_fold2_val --hidden_blocks 1 2 6 8 19 4
+python stage1_organ_segmentation.py --model ROI_stage1_boundary_fold3 --device 1 --dataset ROI_classifier_fold2_val --hidden_blocks 1 2 6 8 19 4
 # training dataset
-python stage1_organ_segmentation.py --model ROI_stage1_fold3 --device 1 --dataset ROI_classifier_fold2_train --hidden_blocks 1 2 6 8 19 4
+python stage1_organ_segmentation.py --model ROI_stage1_boundary_fold3 --device 1 --dataset ROI_classifier_fold2_train --hidden_blocks 1 2 6 8 19 4
+# eval
+python stage1_organ_segmentation_validate.py --device 1 --train_data ROI_classifier_fold2_train --val_data ROI_classifier_fold2_val
+
+# extra
+python training_ROI_preds.py --learning_rate 3e-4 --momentum 0.99 --num_extra_nonexpert_training 80 --model ROI_stage1_fold3_verify --device 1 --epochs 3 --num_extra_steps 14 --train_data ROI_classifier_fold2_train --val_data ROI_classifier_fold2_val --num_slices 9 --hidden_blocks 1 2 6 8 19 4 --use_async_sampler
