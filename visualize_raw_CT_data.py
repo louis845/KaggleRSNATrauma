@@ -230,7 +230,7 @@ class RawCTViewer(QMainWindow):
         # Create a slider to control the slice number, horizontal
         self.slice_number_slider = QSlider()
         self.slice_number_slider.setOrientation(Qt.Horizontal)
-        self.slice_number_slider.setRange(0, 100)
+        self.slice_number_slider.setRange(0, 10)
         self.slice_number_slider.setValue(0)
         self.slice_number_slider.setFixedHeight(self.slice_number_slider.sizeHint().height())
         # Add the slider and label to the main panel
@@ -284,6 +284,8 @@ class RawCTViewer(QMainWindow):
             z_pos = 0
         else:
             z_pos = self.z_positions[value - self.min_series]
+        if self.min_series is not None:
+            self.slice_info_renderer.setIndex(value - self.min_series)
         self.slice_number_label.setText("Slice Number: {}   z-position: {}".format(value, z_pos))
         self.update_image()
 
