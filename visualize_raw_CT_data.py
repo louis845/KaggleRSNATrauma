@@ -12,7 +12,7 @@ import pandas as pd
 from PySide2.QtWidgets import QApplication, QMainWindow, QFrame, QTreeView, QSlider, QLabel, QHBoxLayout, QVBoxLayout,\
     QMessageBox, QComboBox, QWidget
 from PySide2.QtCore import Qt
-from PySide2.QtGui import QStandardItemModel, QStandardItem, QPainter, QColor
+from PySide2.QtGui import QStandardItemModel, QStandardItem, QPainter, QColor, QBrush, QLinearGradient, QGradient, QPen
 import matplotlib
 matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
@@ -31,12 +31,54 @@ def convert_segmentation_to_color(segmentation_image: np.ndarray) -> np.ndarray:
     hsv_image = np.stack([hue, saturation, value], axis=-1)
     return hsv_image
 
-def getHSVColor(segmentation_class: int) -> tuple[int, int, int]:
-    shifted_class = segmentation_class + 1
-    hue = (255.0 * shifted_class / 5.0)
-    saturation = 255
-    value = 255
-    return (int(hue), int(saturation), int(value))
+def collapse_segmentation(segmentation_image: np.ndarray) -> np.ndarray:
+    return np.stack([
+        segmentation_image[..., 0],
+        segmentation_image[..., 1],
+        ((segmentation_image[..., 2].astype(np.int32) + segmentation_image[..., 3].astype(np.int32)) > 0).astype(segmentation_image.dtype),
+        segmentation_image[..., 4],
+    ], axis=-1)
+
+def getHSVColor(segmentation_class: int) -> QBrush:
+    shifted_class = segmentation_class + 1 # shift to match color above
+    if shifted_class == 3: # split open left and right kidney
+        shifted_class = 3.5
+    elif shifted_class == 4:
+        shifted_class = 5
+
+    if shifted_class == 3.5:
+        hue1 = (255.0 * 3 / 5.0)
+        saturation1 = 255
+        value1 = 255
+        hue2 = (255.0 * 4 / 5.0)
+        saturation2 = 255
+        value2 = 255
+
+        hsv_color1 = (int(hue1), int(saturation1), int(value1))
+        rgb_color1 = tuple(cv2.cvtColor(np.array([[list(hsv_color1)]], dtype=np.uint8), cv2.COLOR_HSV2RGB).flatten())
+        hsv_color2 = (int(hue2), int(saturation2), int(value2))
+        rgb_color2 = tuple(cv2.cvtColor(np.array([[list(hsv_color2)]], dtype=np.uint8), cv2.COLOR_HSV2RGB).flatten())
+
+        # convert HSV to RGB and set color
+        gradient = QLinearGradient(0, 0, 1, 0)
+        gradient.setColorAt(0, QColor(rgb_color1[0], rgb_color1[1], rgb_color1[2]))
+        gradient.setColorAt(1, QColor(rgb_color2[0], rgb_color2[1], rgb_color2[2]))
+        gradient.setCoordinateMode(QGradient.ObjectBoundingMode)
+
+        brush = QBrush(gradient)
+    else:
+        hue = (255.0 * shifted_class / 5.0)
+        saturation = 255
+        value = 255
+
+        hsv_color = (int(hue), int(saturation), int(value))
+        rgb_color = tuple(cv2.cvtColor(np.array([[list(hsv_color)]], dtype=np.uint8), cv2.COLOR_HSV2RGB).flatten())
+        # convert HSV to RGB and set color
+        color = QColor()
+        color.setRgb(rgb_color[0], rgb_color[1], rgb_color[2])
+        brush = QBrush(color)
+
+    return brush
 
 class OrgansSliceInfo:
     def __init__(self):
@@ -108,20 +150,16 @@ class SliceOrganRenderer(QWidget):
                 right_x_pos = self.getXPos(organ_slice_info.organ_right[organ_index])
 
                 # set color
-                hsv_color = getHSVColor(organ_index)
-                rgb_color = tuple(cv2.cvtColor(np.array([[list(hsv_color)]], dtype=np.uint8), cv2.COLOR_HSV2RGB).flatten())
+                brush = getHSVColor(organ_index)
                 painter.setPen(Qt.NoPen)
-                # convert HSV to RGB and set color
-                color = QColor()
-                color.setRgb(rgb_color[0], rgb_color[1], rgb_color[2])
-
-                painter.setBrush(color)
+                painter.setBrush(brush)
 
                 # draw rectangle
                 painter.drawRect(left_x_pos, y_poses[organ_index], right_x_pos - left_x_pos,
                                  y_poses[organ_index + 1] - y_poses[organ_index])
 
                 # draw text
+                painter.setPen(QPen(Qt.black, 3))
                 self.drawText(painter, organs[organ_index] + text,
                               (left_x_pos + right_x_pos) / 2, y_poses[organ_index] + y_spacing / 2)
 
@@ -400,14 +438,14 @@ class RawCTViewer(QMainWindow):
                     with h5py.File(os.path.join(self.segmentations_cropped_folder, series_id + ".hdf5"), "r") as f:
                         segmentation_3D_image = f["segmentation_arr"][()]
                     self.slice_info_renderer.gt_organ_slice_info = OrgansSliceInfo()
-                    self.slice_info_renderer.gt_organ_slice_info.set_from_segmentation(segmentation_3D_image)
+                    self.slice_info_renderer.gt_organ_slice_info.set_from_segmentation(collapse_segmentation(segmentation_3D_image))
                     self.segmentation_image = convert_segmentation_to_color(np.any(segmentation_3D_image, axis=-1) * (np.argmax(segmentation_3D_image, axis=-1) + 1))
                     assert segmentation_3D_image.shape[:3] == self.ct_3D_image.shape
                 elif os.path.isfile(os.path.join(self.generated_segmentations_cropped_folder, series_id + ".hdf5")):
                     with h5py.File(os.path.join(self.generated_segmentations_cropped_folder, series_id + ".hdf5"), "r") as f:
                         segmentation_3D_image = f["segmentation_arr"][()]
                     self.slice_info_renderer.gt_organ_slice_info = OrgansSliceInfo()
-                    self.slice_info_renderer.gt_organ_slice_info.set_from_segmentation(segmentation_3D_image)
+                    self.slice_info_renderer.gt_organ_slice_info.set_from_segmentation(collapse_segmentation(segmentation_3D_image))
                     self.segmentation_image = convert_segmentation_to_color(np.any(segmentation_3D_image, axis=-1) * (np.argmax(segmentation_3D_image, axis=-1) + 1))
                     assert segmentation_3D_image.shape[:3] == self.ct_3D_image.shape
         elif self.image_options.currentText() == "hdf5_sampler":
