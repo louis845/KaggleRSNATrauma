@@ -6,10 +6,12 @@ import nibabel
 import numpy as np
 import cv2
 import h5py
+import pandas as pd
 
-from PySide2.QtWidgets import QApplication, QMainWindow, QFrame, QTreeView, QSlider, QLabel, QHBoxLayout, QVBoxLayout, QMessageBox, QComboBox
-from PySide2.QtCore import Qt, QThread, Signal
-from PySide2.QtGui import QStandardItemModel, QStandardItem, QPixmap, QImage
+from PySide2.QtWidgets import QApplication, QMainWindow, QFrame, QTreeView, QSlider, QLabel, QHBoxLayout, QVBoxLayout,\
+    QMessageBox, QComboBox, QWidget
+from PySide2.QtCore import Qt
+from PySide2.QtGui import QStandardItemModel, QStandardItem, QPainter, QColor
 import matplotlib
 matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
@@ -28,6 +30,122 @@ def convert_segmentation_to_color(segmentation_image: np.ndarray) -> np.ndarray:
     value = (seg_float_32 > 0).astype(np.uint8) * 255
     hsv_image = np.stack([hue, saturation, value], axis=-1)
     return hsv_image
+
+def getHSVColor(segmentation_class: int) -> tuple[int, int, int]:
+    shifted_class = segmentation_class + 1
+    hue = (255.0 * shifted_class / 5.0)
+    saturation = 255
+    value = 255
+    return (int(hue), int(saturation), int(value))
+
+class OrgansSliceInfo:
+    def __init__(self):
+        self.loaded = False
+
+        self.organs_available = np.zeros(shape=(4,), dtype=bool)
+        self.organ_left = np.zeros(shape=(4,), dtype=np.int32)
+        self.organ_right = np.zeros(shape=(4,), dtype=np.int32)
+
+    def load_from_csv(self, filepath: str):
+        df = pd.read_csv(filepath)
+        self.organs_available[:] = df["found"].values
+        self.organ_left[:] = df["left"].values
+        self.organ_right[:] = df["right"].values
+
+    def set_from_segmentation(self, segmentation_arr: np.ndarray):
+        self.organs_available[:] = False
+        self.organ_left[:] = 0
+        self.organ_right[:] = 0
+
+        for organ_index in range(4):
+            organ_volume = segmentation_arr[..., organ_index]
+            organ_slice = np.any(organ_volume, axis=(-1, -2))
+            organ_slice_indices = np.argwhere(organ_slice).flatten()
+            if np.any(organ_slice):
+                self.organs_available[organ_index] = True
+                self.organ_left[organ_index] = organ_slice_indices[0]
+                self.organ_right[organ_index] = organ_slice_indices[-1]
+
+        self.loaded = True
+
+class SliceOrganRenderer(QWidget):
+    """A widget that renders the slicewise segmentation classes."""
+    def __init__(self, slices_length: int, current_index: int,
+                 parent=None, gt_organ_slice_info: OrgansSliceInfo=None, pred_organ_slice_info: OrgansSliceInfo=None):
+        super().__init__(parent)
+        self.slices_length = slices_length
+        self.current_index = current_index
+
+        self.gt_organ_slice_info = gt_organ_slice_info
+        self.pred_organ_slice_info = pred_organ_slice_info
+
+    def getXPos(self, index):
+        return index * self.width() / self.slices_length
+
+    def drawVerticalLine(self, painter: QPainter, x_pos):
+        painter.drawLine(x_pos, 0, x_pos, self.height())
+
+    def drawText(self, painter: QPainter, text, x, y):
+        font_metrics = painter.fontMetrics()
+        text_width = font_metrics.width(text)
+        text_height = font_metrics.height()
+        painter.drawText(x - text_width / 2, y + text_height / 2, text)
+
+    def drawSliceInfo(self, painter: QPainter, organ_slice_info: OrgansSliceInfo, min_y, max_y,
+                      text=" (gt)"):
+        y_poses = np.linspace(min_y, max_y, 5)
+        y_spacing = y_poses[1] - y_poses[0]
+
+        # find a QFont such that the height is equal to y_spacing
+        font = painter.font()
+        font.setPointSizeF(y_spacing / 2)
+        painter.setFont(font)
+        
+        organs = ["liver", "spleen", "kidney", "bowel"]
+        for organ_index in range(4):
+            if organ_slice_info.organs_available[organ_index]:
+                left_x_pos = self.getXPos(organ_slice_info.organ_left[organ_index])
+                right_x_pos = self.getXPos(organ_slice_info.organ_right[organ_index])
+
+                # set color
+                hsv_color = getHSVColor(organ_index)
+                painter.setPen(Qt.NoPen)
+                # convert HSV to RGB and set color
+                color = QColor()
+                color.setHsv(hsv_color[0], hsv_color[1], hsv_color[2])
+                painter.setBrush(color)
+
+                # draw rectangle
+                painter.drawRect(left_x_pos, y_poses[organ_index], right_x_pos - left_x_pos,
+                                 y_poses[organ_index + 1] - y_poses[organ_index])
+
+                # draw text
+                self.drawText(painter, organs[organ_index] + text,
+                              (left_x_pos + right_x_pos) / 2, y_poses[organ_index] + y_spacing / 2)
+
+
+    def paintEvent(self, event):
+        """Paint the slice organ image"""
+        painter = QPainter(self)
+
+        # Draw a white background
+        painter.setBrush(Qt.white)
+        painter.drawRect(0, 0, self.width(), self.height())
+
+        if (self.gt_organ_slice_info is not None) and (self.pred_organ_slice_info is not None):
+            self.drawSliceInfo(painter, self.gt_organ_slice_info, 0, self.height() / 2)
+            self.drawSliceInfo(painter, self.pred_organ_slice_info, self.height() / 2, self.height(), text=" (pred)")
+        elif self.gt_organ_slice_info is not None:
+            self.drawSliceInfo(painter, self.gt_organ_slice_info, 0, self.height())
+
+        # Draw current index
+        painter.setPen(Qt.black)
+        self.drawVerticalLine(painter, self.getXPos(self.current_index))
+
+    def setIndex(self, index):
+        self.current_index = index
+        self.update()
+
 
 class RawCTViewer(QMainWindow):
 
@@ -99,6 +217,10 @@ class RawCTViewer(QMainWindow):
         # Create a matplotlib canvas to display the image
         self.fig = plt.figure()
         self.image_canvas = FigureCanvas(self.fig)
+        # Create the renderer for the slice information
+        self.slice_info_renderer = SliceOrganRenderer(10, 0)
+        self.slice_info_renderer.setMaximumHeight(200)
+
         # Create a label for the slice number
         self.slice_number_label = QLabel()
         self.slice_number_label.setText("Slice Number: 0")
@@ -115,6 +237,7 @@ class RawCTViewer(QMainWindow):
         self.main_panel_layout = QVBoxLayout()
         self.main_panel_layout.addWidget(self.image_options)
         self.main_panel_layout.addWidget(self.image_canvas)
+        self.main_panel_layout.addWidget(self.slice_info_renderer)
         self.main_panel_layout.addWidget(self.slice_number_label)
         self.main_panel_layout.addWidget(self.slice_number_slider)
 
@@ -188,6 +311,8 @@ class RawCTViewer(QMainWindow):
 
         self.ct_3D_image = None
         self.segmentation_image = None
+        self.slice_info_renderer.gt_organ_slice_info = None
+        self.slice_info_renderer.pred_organ_slice_info = None
         # Load the data
         if self.image_options.currentText() == "dicom":
             print("Loading DICOM data...")
@@ -273,11 +398,15 @@ class RawCTViewer(QMainWindow):
                 if os.path.isfile(os.path.join(self.segmentations_cropped_folder, series_id + ".hdf5")):
                     with h5py.File(os.path.join(self.segmentations_cropped_folder, series_id + ".hdf5"), "r") as f:
                         segmentation_3D_image = f["segmentation_arr"][()]
+                    self.slice_info_renderer.gt_organ_slice_info = OrgansSliceInfo()
+                    self.slice_info_renderer.gt_organ_slice_info.set_from_segmentation(segmentation_3D_image)
                     self.segmentation_image = convert_segmentation_to_color(np.any(segmentation_3D_image, axis=-1) * (np.argmax(segmentation_3D_image, axis=-1) + 1))
                     assert segmentation_3D_image.shape[:3] == self.ct_3D_image.shape
                 elif os.path.isfile(os.path.join(self.generated_segmentations_cropped_folder, series_id + ".hdf5")):
                     with h5py.File(os.path.join(self.generated_segmentations_cropped_folder, series_id + ".hdf5"), "r") as f:
                         segmentation_3D_image = f["segmentation_arr"][()]
+                    self.slice_info_renderer.gt_organ_slice_info = OrgansSliceInfo()
+                    self.slice_info_renderer.gt_organ_slice_info.set_from_segmentation(segmentation_3D_image)
                     self.segmentation_image = convert_segmentation_to_color(np.any(segmentation_3D_image, axis=-1) * (np.argmax(segmentation_3D_image, axis=-1) + 1))
                     assert segmentation_3D_image.shape[:3] == self.ct_3D_image.shape
         elif self.image_options.currentText() == "hdf5_sampler":
@@ -295,9 +424,11 @@ class RawCTViewer(QMainWindow):
             min_slice, max_slice = 0, 14
 
 
-        # Update the slider
+        # Update the slider and the renderer
         self.slice_number_slider.setRange(min_slice, max_slice)
         self.slice_number_slider.setValue(min_slice)
+        self.slice_info_renderer.slices_length = max_slice - min_slice + 1
+        self.slice_info_renderer.current_index = 0
 
         # Update the image
         self.update_image()
