@@ -234,19 +234,33 @@ def _gen_affine_grid(theta: torch.Tensor, w: int, h: int, ow: int, oh: int) -> t
 def rotate(img: torch.Tensor, angles: list[float]):
     """
     Rotates the 3D image volumes by the given angles, where the angles are given per image in the batch.
+    Adapted from pytorch code (https://github.com/pytorch/vision/blob/main/torchvision/transforms/_functional_tensor.py)
     """
+    ## Get basic information
     w, h = img.shape[-1], img.shape[-2]
     batch_size = img.shape[0]
     assert len(angles) == batch_size, "The number of angles must match the batch size."
     assert len(img.shape) == 5, "The input must be a 5D tensor, (N, C, D, H, W)"
 
+    ## generate base grid (see _gen_affine_grid in PyTorch src)
+    d = 0.5
+    base_grid = torch.empty(1, h, w, 3, dtype=torch.float32, device=img.device)
+    x_grid = torch.linspace(-w * 0.5 + d, w * 0.5 + d - 1, steps=w, device=img.device)
+    base_grid[..., 0].copy_(x_grid)
+    y_grid = torch.linspace(-h * 0.5 + d, h * 0.5 + d - 1, steps=h, device=img.device).unsqueeze_(-1)
+    base_grid[..., 1].copy_(y_grid)
+    base_grid[..., 2].fill_(1)
+
     angle_matrices = [_get_inverse_affine_matrix(-angle, 1.0) for angle in angles]
-    transformation_grids = torch.tensor()
-    for k in range(len(angle_matrices)):
-        mat = angle_matrices[k]
-        mat_torch = torch.tensor(mat, dtype=torch.float32, device=img.device).reshape(1, 2, 3)
-        grid = _gen_affine_grid(mat_torch, w=w, h=h, ow=w, oh=h)
-        transformation_grids.append(grid)
+    angle_matrices = [torch.tensor(mat, dtype=torch.float32, device=img.device).reshape(1, 2, 3) for mat in angle_matrices]
+    angle_matrices = torch.cat(angle_matrices, dim=0)
+    angle_matrices = angle_matrices.transpose(1, 2) / torch.tensor([0.5 * w, 0.5 * h], dtype=torch.float32, device=img.device)
+    grid_transform = base_grid.view(1, h * w, 3).expand(batch_size, h * w, 3).bmm(angle_matrices).view(batch_size, h, w, 2)
+
+    ## Apply the transformation
+    C, D = img.shape[1:3]
+    return torch.nn.functional.grid_sample(img.view(batch_size, C * D, h, w), grid_transform,
+                                           mode="nearest", padding_mode="zeros", align_corners=False).view(batch_size, C, D, h, w)
 
 
 
