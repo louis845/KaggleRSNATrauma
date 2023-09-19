@@ -50,6 +50,15 @@ class Stage1ResultsManager:
                 good_patient_ids.append(patient_id)
         return good_patient_ids
 
+    def restrict_patient_ids_to_organs(self, patient_ids: list, organ_id: int):
+        good_patient_ids = []
+        for patient_id in patient_ids:
+            for series_id in os.listdir(os.path.join("data", "train_images", str(patient_id))):
+                if self.has_organ(int(series_id), organ_id):
+                    good_patient_ids.append(patient_id)
+                    break
+        return good_patient_ids
+
     def get_min2d_size(self, organ_id: int):
         """
         Get the minimum enclosing 2D size (height x width) for the given organ
@@ -109,6 +118,24 @@ class Stage1ResultsManager:
 
         organ_info = pd.read_csv(os.path.join(self.segmentation_dataset_folder, str(series_id) + ".csv"), index_col=0)
         return organ_info.loc[self.organs[organ_id], "left"], organ_info.loc[self.organs[organ_id], "right"]
+
+    def get_dual_series(self, patient_ids: list[int], organ_id: int):
+        s1 = []
+        s2 = []
+        for patient_id in patient_ids:
+            series = os.listdir(os.path.join("data", "train_images", str(patient_id)))
+            series = [int(x) for x in series if self.has_organ(int(x), organ_id) and self.is_series_good(int(x))]
+            if len(series) == 1:
+                s1.append(series[0])
+                s2.append(series[0])
+            elif len(series) == 2:
+                if np.random.rand() > 0.5:
+                    s1.append(series[0])
+                    s2.append(series[1])
+                else:
+                    s1.append(series[1])
+                    s2.append(series[0])
+        return s1, s2
 
 if __name__ == "__main__":
     datasets = [
