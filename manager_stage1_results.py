@@ -9,6 +9,8 @@ SEGMENTATION_RESULTS_FOLDER = "stage1_organ_segmentator"
 SEGMENTATION_EVAL_FOLDER = "stage1_organ_segmentator_eval"
 
 class Stage1ResultsManager:
+    organs = ["liver", "spleen", "kidney", "bowel"]
+
     def __init__(self, dataset_name: str):
         self.dataset_name = dataset_name
         self.segmentation_dataset_folder = os.path.join(SEGMENTATION_RESULTS_FOLDER, dataset_name)
@@ -57,13 +59,12 @@ class Stage1ResultsManager:
         2 - kidney
         3 - bowel
         """
-        organs = ["liver", "spleen", "kidney", "bowel"]
-        organ_size_file = os.path.join(self.segmentation_eval_folder, "min2d_size_{}.txt".format(organs[organ_id]))
+        organ_size_file = os.path.join(self.segmentation_eval_folder, "min2d_size_{}.txt".format(self.organs[organ_id]))
         if os.path.isfile(organ_size_file):
             with open(organ_size_file, "r") as f:
                 lines = f.readlines()
                 assert len(lines) == 2
-                assert lines[0].strip() == "Organ {} (H x W):".format(organs[organ_id])
+                assert lines[0].strip() == "Organ {} (H x W):".format(self.organs[organ_id])
                 height, width = lines[1].strip().split(" x ")
                 enclosing_height = int(height)
                 enclosing_width = int(width)
@@ -76,8 +77,8 @@ class Stage1ResultsManager:
                         organ_mask = f["organ_location"][organ_id, ...] > 0 # shape: (H, W)
 
                     if np.any(organ_mask):
-                        heights = np.any(organ_mask, dim=-1)
-                        widths = np.any(organ_mask, dim=-2)
+                        heights = np.any(organ_mask, axis=-1)
+                        widths = np.any(organ_mask, axis=-2)
 
                         heights = np.argwhere(heights)
                         widths = np.argwhere(widths)
@@ -91,11 +92,23 @@ class Stage1ResultsManager:
             # write to file
             with open(organ_size_file, "w") as f:
                 f.writelines([
-                    "Organ {} (H x W):\n".format(organs[organ_id]),
+                    "Organ {} (H x W):\n".format(self.organs[organ_id]),
                     "{} x {}\n".format(enclosing_height, enclosing_width)
                 ])
 
         return enclosing_height, enclosing_width
+
+    def has_organ(self, series_id: int, organ_id: int) -> bool:
+        assert series_id in self.series
+
+        organ_info = pd.read_csv(os.path.join(self.segmentation_dataset_folder, str(series_id) + ".csv"), index_col=0)
+        return bool(organ_info.loc[self.organs[organ_id], "found"])
+
+    def get_organ_slicelocs(self, series_id: int, organ_id: int) -> tuple[int, int]:
+        assert series_id in self.series
+
+        organ_info = pd.read_csv(os.path.join(self.segmentation_dataset_folder, str(series_id) + ".csv"), index_col=0)
+        return organ_info.loc[self.organs[organ_id], "left"], organ_info.loc[self.organs[organ_id], "right"]
 
 if __name__ == "__main__":
     datasets = [
