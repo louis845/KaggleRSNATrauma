@@ -8,6 +8,7 @@ import torch
 import tqdm
 import h5py
 
+import manager_stage1_results
 import manager_segmentations
 import manager_folds
 import config
@@ -144,8 +145,8 @@ if __name__ == "__main__":
     config.parse_args(args)
     train_data, val_data, train_data_name, val_data_name = manager_folds.parse_args(args)
 
-    folder = "stage1_organ_segmentator"
-    out_folder = "stage1_organ_segmentator_eval"
+    folder = manager_stage1_results.SEGMENTATION_RESULTS_FOLDER
+    out_folder = manager_stage1_results.SEGMENTATION_EVAL_FOLDER
 
     # eval on training set
     print("Eval on training set")

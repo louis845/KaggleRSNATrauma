@@ -378,16 +378,18 @@ class OrganSegmentator():
         return found_organs, left, right, organ_location
 
 if __name__ == "__main__":
-    folder = "stage1_organ_segmentator"
     model_folder = "models"
-    if not os.path.exists(folder):
-        os.makedirs(folder)
 
     import config
     import manager_folds
+    import manager_stage1_results
     import pandas as pd
     import shutil
     import tqdm
+
+    folder = manager_stage1_results.SEGMENTATION_RESULTS_FOLDER
+    if not os.path.exists(folder):
+        os.makedirs(folder)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--channel_progression", type=int, nargs="+", default=[2, 3, 6, 9, 15, 32, 128, 256, 512, 1024],

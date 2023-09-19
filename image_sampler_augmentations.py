@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import cv2
 import torch
@@ -173,6 +175,79 @@ def apply_displacement_field3D_simple(image: torch.Tensor, displacement_field: t
     image = torch.nn.functional.grid_sample(image, grid, mode="nearest", padding_mode="zeros",
                                             align_corners=False)
     return image
+
+def _get_inverse_affine_matrix(angle: float, scale: float, inverted: bool = True) -> list[float]:
+    """
+    Copied from PyTorch source code. https://github.com/pytorch/vision/blob/main/torchvision/transforms/functional.py
+    """
+    center, translate, shear = [0.0, 0.0], [0.0, 0.0], [0.0, 0.0] # don't need these
+    rot = math.radians(angle)
+    sx = math.radians(shear[0])
+    sy = math.radians(shear[1])
+
+    cx, cy = center
+    tx, ty = translate
+
+    # RSS without scaling
+    a = math.cos(rot - sy) / math.cos(sy)
+    b = -math.cos(rot - sy) * math.tan(sx) / math.cos(sy) - math.sin(rot)
+    c = math.sin(rot - sy) / math.cos(sy)
+    d = -math.sin(rot - sy) * math.tan(sx) / math.cos(sy) + math.cos(rot)
+
+    if inverted:
+        # Inverted rotation matrix with scale and shear
+        # det([[a, b], [c, d]]) == 1, since det(rotation) = 1 and det(shear) = 1
+        matrix = [d, -b, 0.0, -c, a, 0.0]
+        matrix = [x / scale for x in matrix]
+        # Apply inverse of translation and of center translation: RSS^-1 * C^-1 * T^-1
+        matrix[2] += matrix[0] * (-cx - tx) + matrix[1] * (-cy - ty)
+        matrix[5] += matrix[3] * (-cx - tx) + matrix[4] * (-cy - ty)
+        # Apply center translation: C * RSS^-1 * C^-1 * T^-1
+        matrix[2] += cx
+        matrix[5] += cy
+    else:
+        matrix = [a, b, 0.0, c, d, 0.0]
+        matrix = [x * scale for x in matrix]
+        # Apply inverse of center translation: RSS * C^-1
+        matrix[2] += matrix[0] * (-cx) + matrix[1] * (-cy)
+        matrix[5] += matrix[3] * (-cx) + matrix[4] * (-cy)
+        # Apply translation and center : T * C * RSS * C^-1
+        matrix[2] += cx + tx
+        matrix[5] += cy + ty
+
+    return matrix
+
+def _gen_affine_grid(theta: torch.Tensor, w: int, h: int, ow: int, oh: int) -> torch.Tensor:
+    # Copied from https://github.com/pytorch/vision/blob/main/torchvision/transforms/_functional_tensor.py
+    d = 0.5
+    base_grid = torch.empty(1, oh, ow, 3, dtype=theta.dtype, device=theta.device)
+    x_grid = torch.linspace(-ow * 0.5 + d, ow * 0.5 + d - 1, steps=ow, device=theta.device)
+    base_grid[..., 0].copy_(x_grid)
+    y_grid = torch.linspace(-oh * 0.5 + d, oh * 0.5 + d - 1, steps=oh, device=theta.device).unsqueeze_(-1)
+    base_grid[..., 1].copy_(y_grid)
+    base_grid[..., 2].fill_(1)
+
+    rescaled_theta = theta.transpose(1, 2) / torch.tensor([0.5 * w, 0.5 * h], dtype=theta.dtype, device=theta.device)
+    output_grid = base_grid.view(1, oh * ow, 3).bmm(rescaled_theta)
+    return output_grid.view(1, oh, ow, 2)
+
+def rotate(img: torch.Tensor, angles: list[float]):
+    """
+    Rotates the 3D image volumes by the given angles, where the angles are given per image in the batch.
+    """
+    w, h = img.shape[-1], img.shape[-2]
+    batch_size = img.shape[0]
+    assert len(angles) == batch_size, "The number of angles must match the batch size."
+    assert len(img.shape) == 5, "The input must be a 5D tensor, (N, C, D, H, W)"
+
+    angle_matrices = [_get_inverse_affine_matrix(-angle, 1.0) for angle in angles]
+    transformation_grids = torch.tensor()
+    for k in range(len(angle_matrices)):
+        mat = angle_matrices[k]
+        mat_torch = torch.tensor(mat, dtype=torch.float32, device=img.device).reshape(1, 2, 3)
+        grid = _gen_affine_grid(mat_torch, w=w, h=h, ow=w, oh=h)
+        transformation_grids.append(grid)
+
 
 
 if __name__ == "__main__":
