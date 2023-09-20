@@ -168,15 +168,9 @@ class ResNetBackbone(torch.nn.Module):
         x = self.conv0(x)
         ret.append(x)
         for i in range(self.pyr_height - 1):
-            if self.use_res_conv:
-                x = self.conv_down[i](x)
-            else:
-                x = self.conv_down[i](self.maxpool(x))
+            x = self.conv_down[i](x)
             ret.append(x)
-        if not self.use_res_conv:
-            x = self.conv_down[-1](self.maxpool(x))
-        else:
-            x = self.conv_down[-1](x)
+        x = self.conv_down[-1](x)
         ret.append(x)
 
         return ret

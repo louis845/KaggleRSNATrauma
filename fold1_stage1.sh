@@ -18,6 +18,3 @@ python stage1_organ_segmentation.py --model ROI_stage1_boundary_fold1 --device 0
 python stage1_organ_segmentation.py --model ROI_stage1_boundary_fold1 --device 0 --memory_limit 0.495 --dataset ROI_classifier_fold0_train --hidden_blocks 1 2 6 8 19 4
 # eval
 python stage1_organ_segmentation_validate.py --device 0 --train_data ROI_classifier_fold0_train --val_data ROI_classifier_fold0_val
-
-# extra
-python training_ROI_preds.py --learning_rate 3e-4 --momentum 0.99 --num_extra_nonexpert_training 80 --model ROI_stage1_fold1_verify --device 0 --memory_limit 0.495 --epochs 3 --num_extra_steps 14 --train_data ROI_classifier_fold0_train --val_data ROI_classifier_fold0_val --num_slices 9 --hidden_blocks 1 2 6 8 19 4 --use_async_sampler

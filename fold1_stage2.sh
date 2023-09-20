@@ -1,0 +1,1 @@
+python training_ROI_classifier.py --device 0 --memory_limit 0.495 --model ROI_stage2_fold1 --hidden_channels 64 --organ liver --train_data ROI_classifier_fold0_train --val_data ROI_classifier_fold0_val

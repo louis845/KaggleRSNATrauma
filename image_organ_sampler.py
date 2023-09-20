@@ -20,8 +20,8 @@ def load_series_image_and_organloc(patient_id: str, series_id: str, slice_indice
     ## Computes the required location of the image to locate the organ
     with h5py.File(os.path.join(segmentation_dataset_folder, series_id + ".hdf5"), "r") as f:
         organ_location = f["organ_location"][organ_id, ...] > 0 # shape (H, W)
-    heights = np.any(organ_location, dim=-1)
-    widths = np.any(organ_location, dim=-2)
+    heights = np.any(organ_location, axis=-1)
+    widths = np.any(organ_location, axis=-2)
     heights, widths = np.argwhere(heights), np.argwhere(widths)
     # Compute the organ bounds
     minH, maxH = heights.min(), heights.max() + 1
@@ -87,13 +87,15 @@ def load_series_image_and_organloc_from_minmax(patient_id: str, series_id: str,
                                                                               size=organ_sampling_depth)
     nearest_slice_indices = np.clip(nearest_slice_indices, 0, len(z_poses) - 1)
 
+    # Flip the nearest slice indices if not flipped
+    if not is_flipped:
+        nearest_slice_indices = nearest_slice_indices[::-1]
+
     # Load the image
     image, organ_location = load_series_image_and_organloc(str(patient_id), str(series_id),
                                                            nearest_slice_indices,
                                                            organ_id, target_w, target_h,
                                                            segmentation_dataset_folder)
-    if is_flipped:  # flip along the depth axis if flipped
-        image = image[::-1, ...].copy()
     return image, organ_location
 
 def load_image(patient_ids: list,
@@ -104,6 +106,8 @@ def load_image(patient_ids: list,
                translate_rotate_augmentation=False,
                elastic_augmentation=False) -> torch.Tensor:
     assert len(patient_ids) == len(series_ids), "patient_ids and series_ids must have the same length"
+    assert organ_width % 32 == 0, "Organ width must be divisible by 32"
+    assert organ_height % 32 == 0, "Organ height must be divisible by 32"
     batch_size = len(patient_ids)
 
 
@@ -127,8 +131,8 @@ def load_image(patient_ids: list,
                                                                            req_rot_w, req_rot_h,
                                                                            stage1_information.segmentation_dataset_folder,
                                                                            elastic_augmentation)
-        image_batch[k, 1, ...].copy_(torch.from_numpy(image), non_blocking=True)
-        organ_loc_batch[k, 1, ...].copy_(torch.from_numpy(organ_location), non_blocking=True)
+        image_batch[k, 0, ...].copy_(torch.from_numpy(image), non_blocking=True)
+        organ_loc_batch[k, 0, ...].copy_(torch.from_numpy(organ_location), non_blocking=True)
 
     with torch.no_grad():
         ## Apply elastic deformation to height width
@@ -178,26 +182,26 @@ def load_image(patient_ids: list,
             if x_min < 0:
                 x_max -= x_min
                 x_min = 0
-            elif x_max >= req_rot_w:
-                x_min -= (x_max - req_rot_w + 1)
-                x_max = req_rot_w - 1
+            elif x_max > req_rot_w:
+                x_min -= (x_max - req_rot_w)
+                x_max = req_rot_w
             if y_min < 0:
                 y_max -= y_min
                 y_min = 0
-            elif y_max >= req_rot_h:
-                y_min -= (y_max - req_rot_h + 1)
-                y_max = req_rot_h - 1
+            elif y_max > req_rot_h:
+                y_min -= (y_max - req_rot_h)
+                y_max = req_rot_h
 
             # apply translation augmentation
             if translate_rotate_augmentation:
-                left_available, right_available = x_min, req_rot_w - x_max - 1
-                top_available, bottom_available = y_min, req_rot_h - y_max - 1
-                x_translation = np.random.randint(min(left_available, 48), min(right_available + 1, 48))
-                y_translation = np.random.randint(min(top_available, 48), min(bottom_available + 1, 48))
+                left_available, right_available = x_min, req_rot_w - x_max
+                top_available, bottom_available = y_min, req_rot_h - y_max
+                x_translation = np.random.randint(-min(left_available, 48), min(right_available, 48) + 1)
+                y_translation = np.random.randint(-min(top_available, 48), min(bottom_available, 48) + 1)
                 x_min, x_max = x_min + x_translation, x_max + x_translation
                 y_min, y_max = y_min + y_translation, y_max + y_translation
 
             # crop the image
-            final_image_batch[k, 0, ...].copy_(image_batch[k, 0, :, y_min:y_max+1, x_min:x_max+1], non_blocking=True)
+            final_image_batch[k, 0, ...].copy_(image_batch[k, 0, :, y_min:y_max, x_min:x_max], non_blocking=True)
 
     return final_image_batch

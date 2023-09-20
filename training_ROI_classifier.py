@@ -79,19 +79,21 @@ def training_step(record: bool):
             # sample now
             image_batch1 = image_organ_sampler.load_image(batch_entries,
                                            series1,
-                                           organ_id, 360, 360,
+                                           organ_id, organ_size[0], organ_size[1],
                                            train_stage1_results,
                                            volume_depth,
                                            translate_rotate_augmentation=not disable_rotpos_augmentation,
                                            elastic_augmentation=not disable_elastic_augmentation)
             image_batch2 = image_organ_sampler.load_image(batch_entries,
                                            series2,
-                                           organ_id, 360, 360,
+                                           organ_id, organ_size[0], organ_size[1],
                                            train_stage1_results,
                                            volume_depth,
                                            translate_rotate_augmentation=not disable_rotpos_augmentation,
                                            elastic_augmentation=not disable_elastic_augmentation)
             image_batch = torch.cat([image_batch1, image_batch2], dim=2)
+            if using_resnet:
+                image_batch = image_batch.squeeze(1)  # (N, 1, 2 * D, H, W) -> (N, 2 * D, H, W)
             labels_batch = torch.tensor(get_labels(batch_entries), device=config.device, dtype=torch.float32)
 
             # do training now
@@ -140,20 +142,22 @@ def validation_step():
             # sample now
             image_batch1 = image_organ_sampler.load_image(batch_entries,
                                            series1,
-                                           organ_id, 360, 360,
+                                           organ_id, organ_size[0], organ_size[1],
                                            val_stage1_results,
                                            volume_depth,
                                            translate_rotate_augmentation=False,
                                            elastic_augmentation=False)
             image_batch2 = image_organ_sampler.load_image(batch_entries,
                                            series2,
-                                           organ_id, 360, 360,
+                                           organ_id, organ_size[0], organ_size[1],
                                            val_stage1_results,
                                            volume_depth,
                                            translate_rotate_augmentation=False,
                                            elastic_augmentation=False)
             with torch.no_grad():
                 image_batch = torch.cat([image_batch1, image_batch2], dim=2)
+                if using_resnet:
+                    image_batch = image_batch.squeeze(1) # (N, 1, 2 * D, H, W) -> (N, 2 * D, H, W)
                 labels_batch = torch.tensor(get_labels(batch_entries), device=config.device, dtype=torch.float32)
 
                 # do validation now
@@ -178,6 +182,11 @@ def print_history(metrics_history):
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
+    sizes = [ # sizes in (H, W)
+        (352, 448), # 0: liver
+        (320, 416), # 1: spleen
+        (224, 352) # 2: kidney
+    ]
 
     parser = argparse.ArgumentParser(description="Train a injury prediction model.")
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs to train for. Default 100.")
@@ -210,6 +219,7 @@ if __name__ == "__main__":
     organ = args.organ
     assert args.organ in ["liver", "spleen", "kidney"], "Organ must be liver, spleen, or kidney."
     organ_id = manager_stage1_results.Stage1ResultsManager.organs.index(organ)
+    organ_size = sizes[organ_id]
 
     # check entries
     training_entries, validation_entries, train_dset_name, val_dset_name = manager_folds.parse_args(args)
@@ -223,13 +233,18 @@ if __name__ == "__main__":
     train_stage1_results.validate_patient_ids_contained(training_entries)
     val_stage1_results.validate_patient_ids_contained(validation_entries)
 
+    original_train_size, original_val_size = len(training_entries), len(validation_entries)
+    print("Original train/val sizes: {}/{}".format(original_train_size, original_val_size))
     training_entries = train_stage1_results.restrict_patient_ids_to_good_series(training_entries)
     validation_entries = val_stage1_results.restrict_patient_ids_to_good_series(validation_entries)
+
 
     training_entries = train_stage1_results.restrict_patient_ids_to_organs(training_entries, organ_id)
     validation_entries = val_stage1_results.restrict_patient_ids_to_organs(validation_entries, organ_id)
     print("Remaining training patients after restriction: {}".format(len(training_entries)))
     print("Remaining validation patients after restriction: {}".format(len(validation_entries)))
+    training_entries = np.array(training_entries, dtype=np.int32)
+    validation_entries = np.array(validation_entries, dtype=np.int32)
 
     # initialize gpu and global params
     config.parse_args(args)
@@ -243,7 +258,6 @@ if __name__ == "__main__":
     learning_rate = args.learning_rate
     momentum = args.momentum
     second_momentum = args.second_momentum
-    disable_random_slices = args.disable_random_slices
     disable_rotpos_augmentation = args.disable_rotpos_augmentation
     disable_elastic_augmentation = args.disable_elastic_augmentation
     batch_size = args.batch_size
@@ -262,7 +276,6 @@ if __name__ == "__main__":
     print("Learning rate: " + str(learning_rate))
     print("Momentum: " + str(momentum))
     print("Second momentum: " + str(second_momentum))
-    print("Disable random slices: " + str(disable_random_slices))
     print("Disable rotation and translation augmentation: " + str(disable_rotpos_augmentation))
     print("Disable elastic augmentation: " + str(disable_elastic_augmentation))
     print("Batch size: " + str(batch_size))
@@ -280,6 +293,7 @@ if __name__ == "__main__":
                                                    bottleneck_expansion=bottleneck_factor, squeeze_excitation=squeeze_excitation,
                                                    use_initial_conv=True)
         model = model_resnet_old.ResNetClassifier(backbone, hidden_channels * (2 ** (len(hidden_blocks) - 1)), out_classes=3)
+        using_resnet = True
     else:
         print("------------------------ Using ResNet attention ------------------------")
         assert isinstance(channel_progression, list), "Channel progression must be a list."
@@ -296,6 +310,7 @@ if __name__ == "__main__":
             bottleneck_factor=bottleneck_factor,
             input_depth=volume_depth
         )
+        using_resnet = False
     model = model.to(config.device)
 
 
@@ -332,8 +347,6 @@ if __name__ == "__main__":
         "learning_rate": learning_rate,
         "momentum": momentum,
         "second_momentum": second_momentum,
-        "extra_nonexpert_segmentation_training_ratio": args.extra_nonexpert_segmentation_training_ratio,
-        "disable_random_slices": disable_random_slices,
         "disable_rotpos_augmentation": disable_rotpos_augmentation,
         "disable_elastic_augmentation": disable_elastic_augmentation,
         "batch_size": batch_size,
