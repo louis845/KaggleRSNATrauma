@@ -207,3 +207,160 @@ def load_image(patient_ids: list,
             final_image_batch[k, 0, ...].copy_(image_batch[k, 0, :, y_min:y_max, x_min:x_max], non_blocking=True)
 
     return final_image_batch
+
+
+if __name__ == "__main__":
+    from PySide2.QtWidgets import QApplication, QMainWindow, QFrame, QSlider, QLabel, \
+        QVBoxLayout, QFileDialog, QPushButton, QComboBox
+    from PySide2.QtCore import Qt, QThread, Signal
+    from PySide2.QtGui import QStandardItemModel, QStandardItem, QPixmap, QImage
+    import h5py
+    import matplotlib.pyplot as plt
+    import torch
+    import torchvision.transforms.functional
+    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+
+    import manager_folds
+
+    class OrganSamplerViewer(QMainWindow):
+
+        ct_batch: np.ndarray
+
+        fig: plt.Figure
+        image_canvas: FigureCanvas
+
+        def __init__(self, ct_batch: np.ndarray):
+            super().__init__()
+            assert ct_batch.shape[2] % 2 == 0
+
+            self.ct_batch = ct_batch
+
+            self.setup_ui()
+            self.setup_connections()
+
+            self.N, self.C, self.D, self.H, self.W = self.ct_batch.shape
+            self.slice_number_slider.setRange(0, (self.D // 2) - 1)
+
+        def setup_ui(self):
+            """
+            Set up the UI.
+            """
+            # Create the main window
+            self.setWindowTitle("Raw CT Viewer")
+            self.resize(1920, 1080)
+
+            # Set the main layout
+            self.main_widget = QFrame()
+            self.setCentralWidget(self.main_widget)
+
+            # Create a matplotlib canvas to display the image
+            self.fig = plt.figure()
+            self.image_canvas = FigureCanvas(self.fig)
+            # Create a label for the slice number
+            self.slice_number_label = QLabel()
+            self.slice_number_label.setText("Slice Number: 0")
+            self.slice_number_label.setAlignment(Qt.AlignCenter)
+            self.slice_number_label.setFixedHeight(self.slice_number_label.fontMetrics().boundingRect(
+                self.slice_number_label.text()).height())
+            # Create a slider to control the slice number, horizontal
+            self.slice_number_slider = QSlider()
+            self.slice_number_slider.setOrientation(Qt.Horizontal)
+            self.slice_number_slider.setRange(0, 100)
+            self.slice_number_slider.setValue(0)
+            self.slice_number_slider.setFixedHeight(self.slice_number_slider.sizeHint().height())
+            # Create a dropdown menu to control the batch index
+            self.batch_index_dropdown = QComboBox()
+            self.batch_index_dropdown.setFixedHeight(self.batch_index_dropdown.sizeHint().height())
+            self.batch_index_dropdown.setFixedWidth(self.batch_index_dropdown.sizeHint().width() * 2)
+            self.batch_index_dropdown.addItems([str(i) for i in range(self.N)])
+
+            # Add the slider and label to the main panel
+            self.main_layout = QVBoxLayout()
+            self.main_layout.addWidget(self.image_canvas)
+            self.main_layout.addWidget(self.slice_number_label)
+            self.main_layout.addWidget(self.slice_number_slider)
+            self.main_layout.addWidget(self.regenerate_button)
+
+            self.main_widget.setLayout(self.main_layout)
+
+        def setup_connections(self):
+            self.slice_number_slider.valueChanged.connect(self.slice_number_updated)
+            self.batch_index_dropdown.currentIndexChanged.connect(self.batch_index_updated)
+
+        def slice_number_updated(self, value: int):
+            self.slice_number_label.setText("Slice Number: {}".format(value))
+            self.update_image()
+
+        def batch_index_updated(self, value: int):
+            self.update_image()
+
+        def update_image(self):
+            # Get the slice number
+            slice_number = self.slice_number_slider.value()
+            # Get the batch index
+            batch_index = self.batch_index_dropdown.currentIndex()
+            # Get the image
+            slice1 = self.ct_image[batch_index, 0, slice_number, ...]
+            slice2 = self.ct_image[batch_index, 0, slice_number + (self.ct_batch.shape[2] // 2), ...]
+
+            self.fig.clear()
+            ax_ct1 = self.fig.add_subplot(1, 2, 1)
+            ax_ct1.imshow(slice1, cmap="gray")
+            ax_ct2 = self.fig.add_subplot(1, 2, 2)
+            ax_ct2.imshow(slice2, cmap="gray")
+
+            self.fig.set_size_inches(slice.shape[1] / 100 * 2, slice.shape[0] / 100)
+            self.image_canvas.draw()
+
+
+    app = QApplication([])
+    dataset_path = QFileDialog.getOpenFileName(None, "Select Dataset", "folds", "JSON (*.json)")[0]
+    if dataset_path == "":
+        exit(0)
+
+    sizes = [  # sizes in (H, W)
+        (352, 448),  # 0: liver
+        (320, 416),  # 1: spleen
+        (224, 352)  # 2: kidney
+    ]
+
+    organ_id = 0
+    organ_size = sizes[organ_id]
+    subdata = os.path.basename(dataset_path)[:-5]
+
+    # Load the dataset
+    dataset = manager_folds.load_dataset(subdata)
+    dataset = dataset
+    stage1_results = manager_stage1_results.Stage1ResultsManager(subdata)
+
+    dataset = stage1_results.restrict_patient_ids_to_good_series(dataset)
+    dataset = stage1_results.restrict_patient_ids_to_organs(dataset, organ_id)
+
+    # generate series
+    patient_ids = dataset[:10]
+    series1, series2 = stage1_results.get_dual_series(patient_ids, organ_id=organ_id)
+
+    # load image
+    volume_depth = 9
+    disable_rotpos_augmentation = False
+    disable_elastic_augmentation = False
+    image_batch1 = load_image(patient_ids,
+                                  series1,
+                                  organ_id, organ_size[0], organ_size[1],
+                                  stage1_results,
+                                  volume_depth,
+                                  translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                  elastic_augmentation=not disable_elastic_augmentation)
+    image_batch2 = load_image(patient_ids,
+                                  series2,
+                                  organ_id, organ_size[0], organ_size[1],
+                                  stage1_results,
+                                  volume_depth,
+                                  translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                  elastic_augmentation=not disable_elastic_augmentation)
+
+    image_batch = torch.cat([image_batch1, image_batch2], dim=2)
+
+    window = OrganSamplerViewer(image_batch.cpu().numpy())
+    window.show()
+    app.exec_()
