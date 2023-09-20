@@ -96,6 +96,8 @@ def load_series_image_and_organloc_from_minmax(patient_id: str, series_id: str,
                                                            nearest_slice_indices,
                                                            organ_id, target_w, target_h,
                                                            segmentation_dataset_folder)
+    if is_flipped:
+        image = image[::-1, ...].copy()
     return image, organ_location
 
 def load_image(patient_ids: list,
