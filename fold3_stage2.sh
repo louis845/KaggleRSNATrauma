@@ -1,1 +1,2 @@
-python training_ROI_classifier.py --device 1 --model ROI_stage2_fold3 --hidden_channels 64 --organ liver --train_data ROI_classifier_fold2_train --val_data ROI_classifier_fold2_val
+#python training_ROI_classifier.py --device 1 --model ROI_stage2_fold3 --hidden_channels 64 --organ liver --train_data ROI_classifier_fold2_train --val_data ROI_classifier_fold2_val
+python training_ROI_classifier.py --device 1 --model ROI_stage2_fold3 --channel_progression 4 8 16 32 64 128 --hidden_blocks 1 2 6 8 23 8 --organ liver --train_data ROI_classifier_fold2_train --val_data ROI_classifier_fold2_val

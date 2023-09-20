@@ -53,7 +53,7 @@ class ResConv3DAttnBlock(torch.nn.Module):
             self.projQ_embedding = torch.nn.Conv3d(attention_dim, attention_dim, 1, bias=False, padding="same")
             self.projK_embedding = torch.nn.Conv3d(attention_dim, attention_dim, 1, bias=False, padding="same")
         else:
-            if self.mix_images:
+            if mix_images:
                 # mix the images, the positional embeddings should be same for each image
                 self.Q_embedding = torch.nn.Parameter(torch.tile(
                     torch.rand(size=(1, attention_dim, depth, 1, 1)) / 2, (1, 1, 2, 1, 1)))
@@ -106,20 +106,20 @@ class ResConv3DAttnBlock(torch.nn.Module):
         N, _, _, H, W = x.shape
 
         # compute Q, K, V
-        V = self.proj_V(x)
+        V = self.projV(x)
         V = self.batchnormV(V)
         if not self.mix_images:
             V = V.view(N, self.out_channels, 2, self.depth, H, W)
         if self.pos_embeddings_input:
-            Q = self.proj_Q(x) + self.projQ_embedding(pos_embeddings)
-            K = self.proj_K(x) + self.projK_embedding(pos_embeddings)
+            Q = self.projQ(x) + self.projQ_embedding(pos_embeddings)
+            K = self.projK(x) + self.projK_embedding(pos_embeddings)
         else:
             if self.mix_images:
-                Q = self.proj_Q(x) + self.Q_embedding
-                K = self.proj_K(x) + self.K_embedding
+                Q = self.projQ(x) + self.Q_embedding
+                K = self.projK(x) + self.K_embedding
             else:
-                Q = self.proj_Q(x).view(N, self.attention_dim, 2, self.depth, H, W) + self.Q_embedding
-                K = self.proj_K(x).view(N, self.attention_dim, 2, self.depth, H, W) + self.K_embedding
+                Q = self.projQ(x).view(N, self.attention_dim, 2, self.depth, H, W) + self.Q_embedding
+                K = self.projK(x).view(N, self.attention_dim, 2, self.depth, H, W) + self.K_embedding
         # depthwise and imagewise attention
         Q = Q.unsqueeze(-3)
         assert (Q.shape[-4:] == (self.depth, 1, H, W)) or (Q.shape[-4:] == (self.depth * 2, 1, H, W))
@@ -149,8 +149,12 @@ class ResConv3DAttn(torch.nn.Module):
         assert in_channels <= out_channels, "in_channels must be smaller or equal to out_channels"
 
         self.conv_res = torch.nn.ModuleList()
-        for k in range(blocks):
-            self.conv_res.append(ResConv3DAttnBlock(in_channels, out_channels, downsample=downsample,
+        self.conv_res.append(ResConv3DAttnBlock(in_channels, out_channels, downsample=downsample,
+                                                bottleneck_factor=bottleneck_factor, attention_dim=attention_dim,
+                                                depth=depth, pos_embeddings_input=pos_embeddings_input,
+                                                mix_images=mix_images))
+        for k in range(blocks - 1):
+            self.conv_res.append(ResConv3DAttnBlock(out_channels, out_channels, downsample=False,
                                                     bottleneck_factor=bottleneck_factor, attention_dim=attention_dim,
                                                     depth=depth, pos_embeddings_input=pos_embeddings_input,
                                                     mix_images=mix_images))
@@ -174,9 +178,13 @@ class ResConv2D(torch.nn.Module):
         assert in_channels <= out_channels, "in_channels must be smaller or equal to out_channels"
 
         self.conv_res = torch.nn.ModuleList()
+        self.conv_res.append(model_3d_patch_resnet.ResConv2DBlock(in_channels, out_channels,
+                                                                  downsample=downsample, bottleneck_factor=1,
+                                                                  squeeze_excitation=True,
+                                                                  squeeze_excitation_bottleneck_factor=2))
         for k in range(blocks):
-            self.conv_res.append(model_3d_patch_resnet.ResConv2DBlock(in_channels, out_channels,
-                                                    downsample=downsample, bottleneck_factor=1,
+            self.conv_res.append(model_3d_patch_resnet.ResConv2DBlock(out_channels, out_channels,
+                                                    downsample=False, bottleneck_factor=1,
                                                     squeeze_excitation=True, squeeze_excitation_bottleneck_factor=2))
         self.blocks = blocks
 
@@ -245,7 +253,7 @@ class ResNet3DClassifier(torch.nn.Module):
                 x = self.convs[i](x)
 
         assert x.shape[:3] == (N, self.last_channel, self.input_depth * 2)
-        H, W = x.shape[2:]
+        H, W = x.shape[-2:]
         x = self.outpool(x.view(N, self.last_channel * self.input_depth * 2, H, W))
         x = self.outconv(x).view(N, -1)
         return x
