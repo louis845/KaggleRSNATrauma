@@ -20,57 +20,44 @@ import manager_folds
 import manager_models
 import manager_segmentations
 import manager_stage1_results
+import model_3d_predictor_resnet
 import model_resnet_old
 import metrics
 import image_organ_sampler
 import training_shuffle_utils
 
 
+def get_labels(batch_entries):
+    stack = []
+    for patient_id in batch_entries:
+        if organ_id == 0: # liver
+            status = manager_folds.get_liver_status_single(int(patient_id))
+        elif organ_id == 1: # spleen
+            status = manager_folds.get_spleen_status_single(int(patient_id))
+        elif organ_id == 2: # kidney
+            status = manager_folds.get_kidney_status_single(int(patient_id))
+        assert status.shape == (3,)
+        assert isinstance(status, np.ndarray)
+        stack.append(status)
+    return np.stack(stack, axis=0).astype(np.float32)
+
+weights_tensor = None # to be initialized
 def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
-                            slices: torch.Tensor, injury_labels: list[torch.Tensor], deep_guidance: bool):
+                            image_batch: torch.Tensor, labels_batch: torch.Tensor):
+    with torch.no_grad():
+        labels_batch_amax = torch.argmax(labels_batch, dim=-1)
+        weights = torch.sum(labels_batch * weights_tensor, dim=-1)
     optimizer_.zero_grad()
-    pred_probas, per_slice_logits, pred_segmentations = model_(slices)
-    loss = 0
-    deep_class_losses = []
-    class_losses = []
-    for k in range(4):
-        is_ternary = UsedLabelManager.is_ternary(k)
-        if deep_guidance:
-            if is_ternary:
-                class_loss = ternary_focal_loss_slicepreds(per_slice_logits[k], injury_labels[k])
-            else:
-                class_loss = binary_focal_loss_slicepreds(per_slice_logits[k], injury_labels[k].unsqueeze(-1))
-            if k == 4:
-                loss += (class_loss)
-            deep_class_losses.append(class_loss.item())
-
-        if is_ternary:
-            class_loss = ternary_loss(pred_probas[k], torch.max(injury_labels[k], dim=0, keepdim=True)[0])
-        else:
-            class_loss = binary_loss(pred_probas[k], torch.max(injury_labels[k], dim=0, keepdim=True)[0].unsqueeze(0).to(torch.float32))
-        if k != 4:
-            loss += class_loss
-        class_losses.append(class_loss.item())
-
+    pred_logits = model_(image_batch)
+    loss = torch.nn.functional.cross_entropy(pred_logits, labels_batch_amax, reduction="none")
+    loss = torch.sum(loss * weights)
     loss.backward()
     optimizer_.step()
 
-    pred_classes = []
-    per_slice_pred_classes = []
     with torch.no_grad():
-        for k in range(4):
-            is_ternary = UsedLabelManager.is_ternary(k)
-            if is_ternary:
-                pred_classes.append(torch.argmax(pred_probas[k], dim=1))
-                per_slice_pred_classes.append(torch.argmax(per_slice_logits[k], dim=1))
-            else:
-                if final_predictions_logits:
-                    pred_classes.append((pred_probas[k] > 0.0).squeeze(-1).to(torch.long))
-                else:
-                    pred_classes.append((pred_probas[k] > 0.5).squeeze(-1).to(torch.long))
-                per_slice_pred_classes.append((per_slice_logits[k] > 0).squeeze(-1).to(torch.long))
+        preds = torch.argmax(pred_logits, dim=-1)
 
-    return loss, deep_class_losses, class_losses, pred_classes, per_slice_pred_classes
+    return loss.item(), preds, weights.cpu().numpy()
 
 def training_step(record: bool):
     if record:
@@ -85,38 +72,39 @@ def training_step(record: bool):
     with tqdm.tqdm(total=len(shuffle_indices)) as pbar:
         while trained < len(shuffle_indices):
             length = min(len(shuffle_indices) - trained, batch_size)
-            batch_entries = training_entries[shuffle_indices[trained:trained + length]]
+            batch_entries = training_entries[shuffle_indices[trained:trained + length]] # patient ids
             # prepare options for image sampler
             series1, series2 = train_stage1_results.get_dual_series(batch_entries, organ_id=organ_id)
 
             # sample now
-            image_batch = image_organ_sampler.load_image(batch_entries,
+            image_batch1 = image_organ_sampler.load_image(batch_entries,
                                            series1,
                                            organ_id, 360, 360,
                                            train_stage1_results,
                                            volume_depth,
                                            translate_rotate_augmentation=not disable_rotpos_augmentation,
                                            elastic_augmentation=not disable_elastic_augmentation)
+            image_batch2 = image_organ_sampler.load_image(batch_entries,
+                                           series2,
+                                           organ_id, 360, 360,
+                                           train_stage1_results,
+                                           volume_depth,
+                                           translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                           elastic_augmentation=not disable_elastic_augmentation)
+            image_batch = torch.cat([image_batch1, image_batch2], dim=2)
+            labels_batch = torch.tensor(get_labels(batch_entries), device=config.device, dtype=torch.float32)
 
             # do training now
-            loss, preds = single_training_step(model, optimizer, image_batch, injury_labels, deep_guidance)
+            loss, preds, weights = single_training_step(model, optimizer, image_batch, labels_batch)
 
             # record
             if record:
-                # compute metrics
-                for class_code in range(4):
-                    if class_code == 3 and not is_expert:
-                        continue
-                    organ_loss_key = MetricKeys.get_segmentation_metric_key_by_class_code(class_code, is_loss=True)
-                    organ_key = MetricKeys.get_segmentation_metric_key_by_class_code(class_code, is_loss=False)
-                    train_metrics[organ_loss_key].add(loss_per_class[class_code], 1)
-                    train_metrics[organ_key].add_direct(tp_per_class[class_code], tn_per_class[class_code],
-                                                        fp_per_class[class_code], fn_per_class[class_code])
-                train_metrics[MetricKeys.LOSS].add(loss, 1)
+                with torch.no_grad():
+                    train_metrics["loss"].add(loss, sum(list(weights)))
+                    train_metrics["metric"].add(preds, torch.argmax(labels_batch, dim=-1))
 
-
-            trained += 1
-            pbar.update(1)
+            trained += length
+            pbar.update(length)
 
     if record:
         current_metrics = {}
@@ -125,6 +113,64 @@ def training_step(record: bool):
 
         for key in current_metrics:
             train_history[key].append(current_metrics[key])
+
+def single_validation_step(model_: torch.nn.Module, image_batch: torch.Tensor, labels_batch: torch.Tensor):
+    labels_batch_amax = torch.argmax(labels_batch, dim=-1)
+    weights = torch.sum(labels_batch * weights_tensor, dim=-1)
+    pred_logits = model_(image_batch)
+    loss = torch.nn.functional.cross_entropy(pred_logits, labels_batch_amax, reduction="none")
+    loss = torch.sum(loss * weights)
+    preds = torch.argmax(pred_logits, dim=-1)
+
+    return loss.item(), preds, weights.cpu().numpy()
+
+def validation_step():
+    for key in val_metrics:
+        val_metrics[key].reset()
+
+    # validation
+    validated = 0
+    with tqdm.tqdm(total=len(validation_entries)) as pbar:
+        while validated < len(validation_entries):
+            length = min(len(validation_entries) - validated, batch_size)
+            batch_entries = validation_entries[validated:validated + length] # patient ids
+            # prepare options for image sampler
+            series1, series2 = val_stage1_results.get_dual_series(batch_entries, organ_id=organ_id)
+
+            # sample now
+            image_batch1 = image_organ_sampler.load_image(batch_entries,
+                                           series1,
+                                           organ_id, 360, 360,
+                                           val_stage1_results,
+                                           volume_depth,
+                                           translate_rotate_augmentation=False,
+                                           elastic_augmentation=False)
+            image_batch2 = image_organ_sampler.load_image(batch_entries,
+                                           series2,
+                                           organ_id, 360, 360,
+                                           val_stage1_results,
+                                           volume_depth,
+                                           translate_rotate_augmentation=False,
+                                           elastic_augmentation=False)
+            with torch.no_grad():
+                image_batch = torch.cat([image_batch1, image_batch2], dim=2)
+                labels_batch = torch.tensor(get_labels(batch_entries), device=config.device, dtype=torch.float32)
+
+                # do validation now
+                loss, preds, weights = single_validation_step(model, image_batch, labels_batch)
+
+                val_metrics["loss"].add(loss, sum(list(weights)))
+                val_metrics["metric"].add(preds, torch.argmax(labels_batch, dim=-1))
+
+            validated += length
+            pbar.update(length)
+
+    current_metrics = {}
+    for key in val_metrics:
+        val_metrics[key].write_to_dict(current_metrics)
+
+    for key in current_metrics:
+        val_history[key].append(current_metrics[key])
 
 def print_history(metrics_history):
     for key in metrics_history:
@@ -146,7 +192,11 @@ if __name__ == "__main__":
     parser.add_argument("--epochs_per_save", type=int, default=2, help="Number of epochs between saves. Default 2.")
     parser.add_argument("--hidden_blocks", type=int, nargs="+", default=[1, 6, 8, 23, 8],
                         help="Number of hidden 2d blocks for ResNet backbone.")
-    parser.add_argument("--hidden_channels", type=int, default=64, help="Number of hidden channels. Default 64.")
+    parser.add_argument("--hidden_channels", type=int, default=None, help="Number of hidden channels. Default None.")
+    parser.add_argument("--channel_progression", type=int, nargs="+", default=None,
+                        help="Number of hidden channels per block. Default None.")
+    parser.add_argument("--conv3d_blocks", type=int, nargs="+", default=[0, 0, 0, 1, 1, 2],
+                        help="Type of 3d convolutional blocks per stage. Default [0, 0, 0, 1, 1, 2].")
     parser.add_argument("--bottleneck_factor", type=int, default=4, help="The bottleneck factor of the ResNet backbone. Default 4.")
     parser.add_argument("--squeeze_excitation", action="store_false", help="Whether to use squeeze and excitation. Default True.")
     parser.add_argument("--num_extra_steps", type=int, default=0, help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
@@ -178,9 +228,12 @@ if __name__ == "__main__":
 
     training_entries = train_stage1_results.restrict_patient_ids_to_organs(training_entries, organ_id)
     validation_entries = val_stage1_results.restrict_patient_ids_to_organs(validation_entries, organ_id)
+    print("Remaining training patients after restriction: {}".format(len(training_entries)))
+    print("Remaining validation patients after restriction: {}".format(len(validation_entries)))
 
-    # initialize gpu
+    # initialize gpu and global params
     config.parse_args(args)
+    weights_tensor = torch.tensor([1.0, 2.0, 4.0], dtype=torch.float32, device=config.device)
 
     # get model directories
     model_dir, prev_model_dir = manager_models.parse_args(args)
@@ -199,6 +252,8 @@ if __name__ == "__main__":
     epochs_per_save = args.epochs_per_save
     hidden_blocks = args.hidden_blocks
     hidden_channels = args.hidden_channels
+    channel_progression = args.channel_progression
+    conv3d_blocks = args.conv3d_blocks
     bottleneck_factor = args.bottleneck_factor
     squeeze_excitation = args.squeeze_excitation
     num_extra_steps = args.num_extra_steps
@@ -215,14 +270,34 @@ if __name__ == "__main__":
     assert type(hidden_blocks) == list, "Blocks must be a list."
     for k in hidden_blocks:
         assert type(k) == int, "Blocks must be a list of integers."
-    assert hidden_channels % 4 == 0, "Hidden channels must be divisible by 4."
-
-    backbone = model_resnet_old.ResNetBackbone(volume_depth * 2, hidden_channels // bottleneck_factor, use_batch_norm=True,
-                                               use_res_conv=True, pyr_height=4, res_conv_blocks=hidden_blocks,
-                                               bottleneck_expansion=bottleneck_factor, squeeze_excitation=squeeze_excitation,
-                                               use_initial_conv=True)
-    model = model_resnet_old.ResNetClassifier(backbone, hidden_channels * (2 ** (len(hidden_blocks) - 1)), out_classes=3)
+    assert not (channel_progression is None and hidden_channels is None), "Must specify either hidden channels or channel progression."
+    assert channel_progression is None or hidden_channels is None, "Cannot specify both hidden channels and channel progression."
+    if channel_progression is None:
+        print("------------------------ Using ResNet ------------------------")
+        assert hidden_channels % 4 == 0, "Hidden channels must be divisible by 4."
+        backbone = model_resnet_old.ResNetBackbone(volume_depth * 2, hidden_channels // bottleneck_factor, use_batch_norm=True,
+                                                   pyr_height=4, res_conv_blocks=hidden_blocks,
+                                                   bottleneck_expansion=bottleneck_factor, squeeze_excitation=squeeze_excitation,
+                                                   use_initial_conv=True)
+        model = model_resnet_old.ResNetClassifier(backbone, hidden_channels * (2 ** (len(hidden_blocks) - 1)), out_classes=3)
+    else:
+        print("------------------------ Using ResNet attention ------------------------")
+        assert isinstance(channel_progression, list), "Channel progression must be a list."
+        assert len(channel_progression) == len(hidden_blocks), "Channel progression must have same length as hidden blocks."
+        assert all([type(k) == int for k in channel_progression]), "Channel progression must be a list of integers."
+        assert conv3d_blocks is not None, "Conv3D blocks must be specified for ResNet attention."
+        assert isinstance(conv3d_blocks, list), "Conv3D blocks must be a list."
+        assert len(conv3d_blocks) == len(hidden_blocks), "Conv3D blocks must have same length as hidden blocks."
+        model = model_3d_predictor_resnet.ResNet3DClassifier(
+            in_channels=1, out_classes=3,
+            channel_progression=channel_progression,
+            conv3d_blocks=conv3d_blocks,
+            res_conv_blocks=hidden_blocks,
+            bottleneck_factor=bottleneck_factor,
+            input_depth=volume_depth
+        )
     model = model.to(config.device)
+
 
     print("Learning rate: " + str(learning_rate))
     print("Momentum: " + str(momentum))

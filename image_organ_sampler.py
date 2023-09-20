@@ -130,74 +130,74 @@ def load_image(patient_ids: list,
         image_batch[k, 1, ...].copy_(torch.from_numpy(image), non_blocking=True)
         organ_loc_batch[k, 1, ...].copy_(torch.from_numpy(organ_location), non_blocking=True)
 
+    with torch.no_grad():
+        ## Apply elastic deformation to height width
+        if elastic_augmentation:
+            # 3d elastic deformation (varying 2d elastic deformation over depth), and also varying over slices
+            displacement_field = torch.stack([image_sampler_augmentations.generate_displacement_field3D(req_rot_w, req_rot_h, organ_sampling_depth, # (batch_size, organ_sampling_depth, H, W, 2)
+                                                                                            kernel_depth_span=[0.3, 0.7, 1, 0.7, 0.3], device=config.device) for k in range(batch_size)], dim=0)
+            assert displacement_field.shape == (batch_size, organ_sampling_depth, req_rot_h, req_rot_w, 2)
+            image_batch = image_sampler_augmentations.apply_displacement_field3D_simple(image_batch.reshape(batch_size * organ_sampling_depth, 1, req_rot_h, req_rot_w),
+                                                                                  displacement_field.view(batch_size * organ_sampling_depth, req_rot_h, req_rot_w, 2))\
+                            .view(batch_size, 1, organ_sampling_depth, req_rot_h, req_rot_w)
+            organ_loc_batch = torch.any(image_sampler_augmentations.apply_displacement_field3D_simple(organ_loc_batch.expand(batch_size, organ_sampling_depth, req_rot_h, req_rot_w)
+                                                                                            .reshape(batch_size * organ_sampling_depth, 1, req_rot_h, req_rot_w),
+                                                                                  displacement_field.view(batch_size * organ_sampling_depth, req_rot_h, req_rot_w, 2))
+                                            .view(batch_size, 1, organ_sampling_depth, req_rot_h, req_rot_w) > 0.5, dim=2).float()
 
-    ## Apply elastic deformation to height width
-    if elastic_augmentation:
-        # 3d elastic deformation (varying 2d elastic deformation over depth), and also varying over slices
-        displacement_field = torch.stack([image_sampler_augmentations.generate_displacement_field3D(req_rot_w, req_rot_h, organ_sampling_depth, # (batch_size, organ_sampling_depth, H, W, 2)
-                                                                                        kernel_depth_span=[0.3, 0.7, 1, 0.7, 0.3], device=config.device) for k in range(batch_size)], dim=0)
-        assert displacement_field.shape == (batch_size, organ_sampling_depth, req_rot_h, req_rot_w, 2)
-        image_batch = image_sampler_augmentations.apply_displacement_field3D_simple(image_batch.reshape(batch_size * organ_sampling_depth, 1, req_rot_h, req_rot_w),
-                                                                              displacement_field.view(batch_size * organ_sampling_depth, req_rot_h, req_rot_w, 2))\
-                        .view(batch_size, 1, organ_sampling_depth, req_rot_h, req_rot_w)
-        organ_loc_batch = torch.any(image_sampler_augmentations.apply_displacement_field3D_simple(organ_loc_batch.expand(batch_size, organ_sampling_depth, req_rot_h, req_rot_w)
-                                                                                        .reshape(batch_size * organ_sampling_depth, 1, req_rot_h, req_rot_w),
-                                                                              displacement_field.view(batch_size * organ_sampling_depth, req_rot_h, req_rot_w, 2))
-                                        .view(batch_size, 1, organ_sampling_depth, req_rot_h, req_rot_w) > 0.5, dim=2).float()
-
-    ## Apply rotation augmentation to height width
-    if translate_rotate_augmentation:
-        # Generate the rotation angles
-        rotation_angles = np.random.uniform(low=-max_angle, high=max_angle, size=batch_size)
-        rotation_angles = rotation_angles * 180.0 / np.pi # convert to degrees
-
-        # Rotate the image
-        image_batch = image_sampler_augmentations.rotate(image_batch, list(rotation_angles))
-        organ_loc_batch = image_sampler_augmentations.rotate(organ_loc_batch.view(batch_size, 1, 1, req_rot_h, req_rot_w), list(rotation_angles))\
-                            .view(batch_size, req_rot_h, req_rot_w) > 0.5
-
-    ## Crop the image to the desired size, and apply translation augmentation if necessary
-    final_image_batch = torch.zeros((batch_size, 1, organ_sampling_depth, organ_height, organ_width), dtype=torch.float32,
-                                            device=config.device)
-    for k in range(batch_size):
-        # compute organ bounds
-        heights = torch.any(organ_loc_batch[k, ...], dim=-1)
-        widths = torch.any(organ_loc_batch[k, ...], dim=-2)
-        heights = np.argwhere(heights.cpu().numpy())
-        widths = np.argwhere(widths.cpu().numpy())
-        if len(heights) == 0 or len(widths) == 0:
-            mid_x = req_rot_h // 2
-            mid_y = req_rot_w // 2
-        else:
-            mid_x = (np.min(widths) + np.max(widths)) // 2
-            mid_y = (np.min(heights) + np.max(heights)) // 2
-        x_min, x_max = mid_x - organ_width // 2, mid_x + organ_width // 2
-        y_min, y_max = mid_y - organ_height // 2, mid_y + organ_height // 2
-
-        # correct for out of bounds
-        if x_min < 0:
-            x_max -= x_min
-            x_min = 0
-        elif x_max >= req_rot_w:
-            x_min -= (x_max - req_rot_w + 1)
-            x_max = req_rot_w - 1
-        if y_min < 0:
-            y_max -= y_min
-            y_min = 0
-        elif y_max >= req_rot_h:
-            y_min -= (y_max - req_rot_h + 1)
-            y_max = req_rot_h - 1
-
-        # apply translation augmentation
+        ## Apply rotation augmentation to height width
         if translate_rotate_augmentation:
-            left_available, right_available = x_min, req_rot_w - x_max - 1
-            top_available, bottom_available = y_min, req_rot_h - y_max - 1
-            x_translation = np.random.randint(min(left_available, 48), min(right_available + 1, 48))
-            y_translation = np.random.randint(min(top_available, 48), min(bottom_available + 1, 48))
-            x_min, x_max = x_min + x_translation, x_max + x_translation
-            y_min, y_max = y_min + y_translation, y_max + y_translation
+            # Generate the rotation angles
+            rotation_angles = np.random.uniform(low=-max_angle, high=max_angle, size=batch_size)
+            rotation_angles = rotation_angles * 180.0 / np.pi # convert to degrees
 
-        # crop the image
-        final_image_batch[k, 0, ...].copy_(image_batch[k, 0, :, y_min:y_max+1, x_min:x_max+1], non_blocking=True)
+            # Rotate the image
+            image_batch = image_sampler_augmentations.rotate(image_batch, list(rotation_angles))
+            organ_loc_batch = image_sampler_augmentations.rotate(organ_loc_batch.view(batch_size, 1, 1, req_rot_h, req_rot_w), list(rotation_angles))\
+                                .view(batch_size, req_rot_h, req_rot_w) > 0.5
+
+        ## Crop the image to the desired size, and apply translation augmentation if necessary
+        final_image_batch = torch.zeros((batch_size, 1, organ_sampling_depth, organ_height, organ_width), dtype=torch.float32,
+                                                device=config.device)
+        for k in range(batch_size):
+            # compute organ bounds
+            heights = torch.any(organ_loc_batch[k, ...], dim=-1)
+            widths = torch.any(organ_loc_batch[k, ...], dim=-2)
+            heights = np.argwhere(heights.cpu().numpy())
+            widths = np.argwhere(widths.cpu().numpy())
+            if len(heights) == 0 or len(widths) == 0:
+                mid_x = req_rot_h // 2
+                mid_y = req_rot_w // 2
+            else:
+                mid_x = (np.min(widths) + np.max(widths)) // 2
+                mid_y = (np.min(heights) + np.max(heights)) // 2
+            x_min, x_max = mid_x - organ_width // 2, mid_x + organ_width // 2
+            y_min, y_max = mid_y - organ_height // 2, mid_y + organ_height // 2
+
+            # correct for out of bounds
+            if x_min < 0:
+                x_max -= x_min
+                x_min = 0
+            elif x_max >= req_rot_w:
+                x_min -= (x_max - req_rot_w + 1)
+                x_max = req_rot_w - 1
+            if y_min < 0:
+                y_max -= y_min
+                y_min = 0
+            elif y_max >= req_rot_h:
+                y_min -= (y_max - req_rot_h + 1)
+                y_max = req_rot_h - 1
+
+            # apply translation augmentation
+            if translate_rotate_augmentation:
+                left_available, right_available = x_min, req_rot_w - x_max - 1
+                top_available, bottom_available = y_min, req_rot_h - y_max - 1
+                x_translation = np.random.randint(min(left_available, 48), min(right_available + 1, 48))
+                y_translation = np.random.randint(min(top_available, 48), min(bottom_available + 1, 48))
+                x_min, x_max = x_min + x_translation, x_max + x_translation
+                y_min, y_max = y_min + y_translation, y_max + y_translation
+
+            # crop the image
+            final_image_batch[k, 0, ...].copy_(image_batch[k, 0, :, y_min:y_max+1, x_min:x_max+1], non_blocking=True)
 
     return final_image_batch

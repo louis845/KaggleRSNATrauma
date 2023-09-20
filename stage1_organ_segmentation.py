@@ -377,6 +377,14 @@ class OrganSegmentator():
         assert organ_location.shape == (4, self.loaded_data_H, self.loaded_data_W)
         return found_organs, left, right, organ_location
 
+def predict_organ_location(self, found_organs1, left1, right1, z_poses1,
+                            mask_organs2, left2, right2, z_poses2):
+    """
+    Predicts the z-positions of the organs in the second image, based on the organs
+    in the first image, and selected organs in the second image.
+    """
+    pass
+
 if __name__ == "__main__":
     model_folder = "models"
 

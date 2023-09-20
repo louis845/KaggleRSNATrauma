@@ -37,6 +37,7 @@ class Stage1ResultsManager:
 
     def list_good_series(self, patient_id):
         good_series = []
+        assert os.path.isdir(os.path.join("data", "train_images", str(patient_id))), "Patient not found"
         for series_id in os.listdir(os.path.join("data", "train_images", str(patient_id))):
             assert int(series_id) in self.series
             if self.is_series_good(int(series_id)):
