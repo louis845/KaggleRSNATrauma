@@ -139,6 +139,27 @@ class Stage1ResultsManager:
         return s1, s2
 
 if __name__ == "__main__":
+    def get_wh_area(mgr: Stage1ResultsManager, series_id: int, organ_id: int):
+        with h5py.File(os.path.join(mgr.segmentation_dataset_folder, str(series_id) + ".hdf5"), "r") as f:
+            organ_mask = f["organ_location"][organ_id, ...] > 0  # shape: (H, W)
+
+        if np.any(organ_mask):
+            heights = np.any(organ_mask, axis=-1)
+            widths = np.any(organ_mask, axis=-2)
+
+            heights = np.argwhere(heights)
+            widths = np.argwhere(widths)
+
+            height = heights.max() + 1 - heights.min()
+            width = widths.max() + 1 - widths.min()
+            area = height * width
+        else:
+            area = 0
+            height = 0
+            width = 0
+        return area, height, width
+
+
     datasets = [
         "ROI_classifier_fold0_train",
         "ROI_classifier_fold0_val",
@@ -153,3 +174,4 @@ if __name__ == "__main__":
         organs = ["liver", "spleen", "kidney", "bowel"]
         for i, organ in enumerate(organs):
             print("Min 2D size in {} for {}: {}".format(dataset, organ, mgr.get_min2d_size(i)))
+
