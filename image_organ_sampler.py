@@ -210,6 +210,8 @@ def load_image(patient_ids: list,
 
 
 if __name__ == "__main__":
+    os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH")
+
     from PySide2.QtWidgets import QApplication, QMainWindow, QFrame, QSlider, QLabel, \
         QVBoxLayout, QFileDialog, QPushButton, QComboBox
     from PySide2.QtCore import Qt, QThread, Signal
@@ -232,13 +234,12 @@ if __name__ == "__main__":
         def __init__(self, ct_batch: np.ndarray):
             super().__init__()
             assert ct_batch.shape[2] % 2 == 0
-
             self.ct_batch = ct_batch
+            self.N, self.C, self.D, self.H, self.W = self.ct_batch.shape
 
             self.setup_ui()
             self.setup_connections()
 
-            self.N, self.C, self.D, self.H, self.W = self.ct_batch.shape
             self.slice_number_slider.setRange(0, (self.D // 2) - 1)
 
         def setup_ui(self):
@@ -279,7 +280,7 @@ if __name__ == "__main__":
             self.main_layout.addWidget(self.image_canvas)
             self.main_layout.addWidget(self.slice_number_label)
             self.main_layout.addWidget(self.slice_number_slider)
-            self.main_layout.addWidget(self.regenerate_button)
+            self.main_layout.addWidget(self.batch_index_dropdown)
 
             self.main_widget.setLayout(self.main_layout)
 
@@ -300,8 +301,8 @@ if __name__ == "__main__":
             # Get the batch index
             batch_index = self.batch_index_dropdown.currentIndex()
             # Get the image
-            slice1 = self.ct_image[batch_index, 0, slice_number, ...]
-            slice2 = self.ct_image[batch_index, 0, slice_number + (self.ct_batch.shape[2] // 2), ...]
+            slice1 = self.ct_batch[batch_index, 0, slice_number, ...]
+            slice2 = self.ct_batch[batch_index, 0, slice_number + (self.ct_batch.shape[2] // 2), ...]
 
             self.fig.clear()
             ax_ct1 = self.fig.add_subplot(1, 2, 1)
@@ -309,7 +310,7 @@ if __name__ == "__main__":
             ax_ct2 = self.fig.add_subplot(1, 2, 2)
             ax_ct2.imshow(slice2, cmap="gray")
 
-            self.fig.set_size_inches(slice.shape[1] / 100 * 2, slice.shape[0] / 100)
+            self.fig.set_size_inches(slice1.shape[1] / 100 * 2, slice1.shape[0] / 100)
             self.image_canvas.draw()
 
 
@@ -324,7 +325,7 @@ if __name__ == "__main__":
         (224, 352)  # 2: kidney
     ]
 
-    organ_id = 0
+    organ_id = 2
     organ_size = sizes[organ_id]
     subdata = os.path.basename(dataset_path)[:-5]
 
