@@ -224,7 +224,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Train a injury prediction model.")
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs to train for. Default 100.")
-    parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate to use. Default 3e-4.")
+    parser.add_argument("--learning_rate", type=float, default=3e-4, help="Learning rate to use. Default 3e-4.")
     parser.add_argument("--momentum", type=float, default=0.995, help="Momentum to use. Default 0.9. This would be the momentum for SGD, and beta1 for Adam.")
     parser.add_argument("--second_momentum", type=float, default=0.9995, help="Second momentum to use. Default 0.999. This would be beta2 for Adam. Ignored if SGD.")
     parser.add_argument("--disable_rotpos_augmentation", action="store_true", help="Whether to disable rotation and translation augmentation. Default False.")
