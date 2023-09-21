@@ -224,9 +224,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Train a injury prediction model.")
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs to train for. Default 100.")
-    parser.add_argument("--learning_rate", type=float, default=3e-4, help="Learning rate to use. Default 3e-4.")
-    parser.add_argument("--momentum", type=float, default=0.9, help="Momentum to use. Default 0.9. This would be the momentum for SGD, and beta1 for Adam.")
-    parser.add_argument("--second_momentum", type=float, default=0.999, help="Second momentum to use. Default 0.999. This would be beta2 for Adam. Ignored if SGD.")
+    parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate to use. Default 3e-4.")
+    parser.add_argument("--momentum", type=float, default=0.995, help="Momentum to use. Default 0.9. This would be the momentum for SGD, and beta1 for Adam.")
+    parser.add_argument("--second_momentum", type=float, default=0.9995, help="Second momentum to use. Default 0.999. This would be beta2 for Adam. Ignored if SGD.")
     parser.add_argument("--disable_rotpos_augmentation", action="store_true", help="Whether to disable rotation and translation augmentation. Default False.")
     parser.add_argument("--disable_elastic_augmentation", action="store_true", help="Whether to disable elastic augmentation. Default False.")
     parser.add_argument("--batch_size", type=int, default=9, help="Batch size. Default 9")
@@ -315,6 +315,7 @@ if __name__ == "__main__":
     print("Disable rotation and translation augmentation: " + str(disable_rotpos_augmentation))
     print("Disable elastic augmentation: " + str(disable_elastic_augmentation))
     print("Batch size: " + str(batch_size))
+    model_resnet_old.BATCH_NORM_MOMENTUM = 1 - momentum
 
     assert type(hidden_blocks) == list, "Blocks must be a list."
     for k in hidden_blocks:
@@ -363,7 +364,12 @@ if __name__ == "__main__":
         exit(1)
 
     # Load previous model checkpoint if available
-    if prev_model_dir is not None:
+    if prev_model_dir is None:
+        warmup_steps = 2
+        for g in optimizer.param_groups:
+            g["lr"] = 0.0
+    else:
+        warmup_steps = 0
         model_checkpoint_path = os.path.join(prev_model_dir, "model.pt")
         optimizer_checkpoint_path = os.path.join(prev_model_dir, "optimizer.pt")
 
@@ -445,6 +451,12 @@ if __name__ == "__main__":
 
             print("Running the usual step of gradient descent.")
             training_step(record=True)
+
+            if warmup_steps > 0:
+                warmup_steps -= 1
+                if warmup_steps == 0:
+                    for g in optimizer.param_groups:
+                        g["lr"] = learning_rate
 
             # switch model to eval mode, and reset all running stats for batchnorm layers
             model.eval()

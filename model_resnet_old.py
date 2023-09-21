@@ -1,5 +1,7 @@
 import torch
 
+BATCH_NORM_MOMENTUM = 0.1
+
 class ResConvBlock(torch.nn.Module):
     def __init__(self, in_channels, out_channels, use_batch_norm=False, downsample=False, bottleneck_expansion=1,
                  squeeze_excitation=False):
@@ -18,7 +20,7 @@ class ResConvBlock(torch.nn.Module):
 
         self.conv1 = torch.nn.Conv2d(in_channels, out_channels, 1, bias=False, padding="same", padding_mode="replicate")
         if use_batch_norm:
-            self.batchnorm1 = torch.nn.BatchNorm2d(out_channels)
+            self.batchnorm1 = torch.nn.BatchNorm2d(out_channels, momentum=BATCH_NORM_MOMENTUM)
         else:
             self.batchnorm1 = torch.nn.GroupNorm(num_groups=out_channels, num_channels=out_channels)  # instance norm
         self.elu1 = torch.nn.ReLU(inplace=True)
@@ -33,7 +35,7 @@ class ResConvBlock(torch.nn.Module):
             self.conv2 = torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, bias=False, padding="same",
                                          padding_mode="replicate", groups=num_groups)
         if use_batch_norm:
-            self.batchnorm2 = torch.nn.BatchNorm2d(out_channels)
+            self.batchnorm2 = torch.nn.BatchNorm2d(out_channels, momentum=BATCH_NORM_MOMENTUM)
         else:
             self.batchnorm2 = torch.nn.GroupNorm(num_groups=out_channels, num_channels=out_channels)  # instance norm
         self.elu2 = torch.nn.ReLU(inplace=True)
@@ -41,7 +43,7 @@ class ResConvBlock(torch.nn.Module):
         self.conv3 = torch.nn.Conv2d(out_channels, out_channels * bottleneck_expansion, 1, bias=False, padding="same",
                                      padding_mode="replicate")
         if use_batch_norm:
-            self.batchnorm3 = torch.nn.BatchNorm2d(out_channels * bottleneck_expansion)
+            self.batchnorm3 = torch.nn.BatchNorm2d(out_channels * bottleneck_expansion, momentum=BATCH_NORM_MOMENTUM)
         else:
             self.batchnorm3 = torch.nn.GroupNorm(num_groups=out_channels * bottleneck_expansion,
                                                  num_channels=out_channels * bottleneck_expansion)  # instance norm
@@ -133,7 +135,7 @@ class ResNetBackbone(torch.nn.Module):
             self.initial_conv = torch.nn.Conv2d(in_channels, hidden_channels * bottleneck_expansion, kernel_size=7,
                                                 bias=False, padding="same", padding_mode="replicate")
             if use_batch_norm:
-                self.initial_batch_norm = torch.nn.BatchNorm2d(hidden_channels * bottleneck_expansion)
+                self.initial_batch_norm = torch.nn.BatchNorm2d(hidden_channels * bottleneck_expansion, momentum=BATCH_NORM_MOMENTUM)
             else:
                 self.initial_batch_norm = torch.nn.GroupNorm(num_groups=hidden_channels * bottleneck_expansion,
                                                              num_channels=hidden_channels * bottleneck_expansion)  # instance norm
