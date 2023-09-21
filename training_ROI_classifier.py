@@ -24,6 +24,7 @@ import model_3d_predictor_resnet
 import model_resnet_old
 import metrics
 import image_organ_sampler
+import image_organ_sampler_async
 import training_shuffle_utils
 
 
@@ -57,7 +58,7 @@ def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimi
     with torch.no_grad():
         preds = torch.argmax(pred_logits, dim=-1)
 
-    return loss.item(), preds, weights.cpu().numpy()
+    return loss.item(), preds, weights
 
 def training_step(record: bool):
     if record:
@@ -98,6 +99,7 @@ def training_step(record: bool):
 
             # do training now
             loss, preds, weights = single_training_step(model, optimizer, image_batch, labels_batch)
+            weights = weights.cpu().numpy()
 
             # record
             if record:
@@ -208,6 +210,7 @@ if __name__ == "__main__":
                         help="Type of 3d convolutional blocks per stage. Default [0, 0, 0, 1, 1, 2].")
     parser.add_argument("--bottleneck_factor", type=int, default=4, help="The bottleneck factor of the ResNet backbone. Default 4.")
     parser.add_argument("--squeeze_excitation", action="store_false", help="Whether to use squeeze and excitation. Default True.")
+    parser.add_argument("--use_async_sampler", action="store_true", help="Whether to use the asynchronous sampler. Default False.")
     parser.add_argument("--num_extra_steps", type=int, default=0, help="Extra steps of gradient descent before the usual step in an epoch. Default 0.")
     parser.add_argument("--organ", type=str, help="Which organ to train on. Default liver. Available options: liver, spleen, kidney", required=True)
     manager_folds.add_argparse_arguments(parser)
@@ -270,6 +273,7 @@ if __name__ == "__main__":
     conv3d_blocks = args.conv3d_blocks
     bottleneck_factor = args.bottleneck_factor
     squeeze_excitation = args.squeeze_excitation
+    use_async_sampler = args.use_async_sampler
     num_extra_steps = args.num_extra_steps
 
     print("Epochs: " + str(epochs))
@@ -380,10 +384,16 @@ if __name__ == "__main__":
     single_training_step_compile = torch.compile(single_training_step)
 
     # Initialize the async sampler if necessary
-    """
     if use_async_sampler:
         print("Initializing async sampler....")
-        image_ROI_sampler_async.initialize_async_ROI_sampler(use_3d=use_3d_prediction, name=train_dset_name)"""
+        image_organ_sampler_async.initialize_async_organ_sampler(
+            sampling_depth=volume_depth,
+            o_id=organ_id,
+            organ_width=organ_size[1],
+            organ_height=organ_size[0],
+            num_workers=8,
+            name=args.model
+        )
 
     # Start training loop
     print("Training for {} epochs......".format(epochs))
@@ -441,5 +451,5 @@ if __name__ == "__main__":
 
     memory_logger.close()
 
-    """if use_async_sampler:
-        image_ROI_sampler_async.clean_and_destroy_ROI_sampler()"""
+    if use_async_sampler:
+        image_organ_sampler_async.clean_and_destroy_organ_sampler()
