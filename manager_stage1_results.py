@@ -139,6 +139,9 @@ class Stage1ResultsManager:
         return s1, s2
 
 if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
     def get_wh_area(mgr: Stage1ResultsManager, series_id: int, organ_id: int):
         with h5py.File(os.path.join(mgr.segmentation_dataset_folder, str(series_id) + ".hdf5"), "r") as f:
             organ_mask = f["organ_location"][organ_id, ...] > 0  # shape: (H, W)
@@ -169,9 +172,52 @@ if __name__ == "__main__":
         "ROI_classifier_fold2_val"
     ]
 
+    organs = ["liver", "spleen", "kidney", "bowel"]
+    per_organ_outliers = {organ: [] for organ in organs}
     for dataset in datasets:
         mgr = Stage1ResultsManager(dataset)
-        organs = ["liver", "spleen", "kidney", "bowel"]
         for i, organ in enumerate(organs):
             print("Min 2D size in {} for {}: {}".format(dataset, organ, mgr.get_min2d_size(i)))
 
+            info = {"series_id": [], "area": [], "height": [], "width": []}
+            for series_id in tqdm.tqdm(mgr.series):
+                if mgr.is_series_good(series_id):
+                    area, height, width = get_wh_area(mgr, series_id, i)
+                    info["series_id"].append(series_id)
+                    info["area"].append(area)
+                    info["height"].append(height)
+                    info["width"].append(width)
+            info = pd.DataFrame(info, columns=["area", "height", "width"], index=info["series_id"])
+
+            # Find outliers. We use (height, width) as the feature vector for each image, and use the
+            # interquartile range to find outliers. Outliers are defined as points that are not between
+            # the 5% to 95% quantiles, in at least one dimension (H or W).
+            cols = ["height", "width"]
+            for col in cols:
+                q1 = info[col].quantile(0.05)
+                q3 = info[col].quantile(0.95)
+                iqr = q3 - q1
+                outliers = info[(info[col] < q1 - 1.5 * iqr) | (info[col] > q3 + 1.5 * iqr)]
+                outliers = list(outliers.index)
+                for outlier in outliers:
+                    if outlier not in per_organ_outliers[organ]:
+                        per_organ_outliers[organ].append(outlier)
+                # add a column "outlier" to the info dataframe, indicating whether each image is an outlier
+                info["outlier"] = info.index.isin(outliers)
+
+
+            # plot 4 matplotlib plots. The first three are boxplots for the distribution of area, height, and width.
+            # The last plot is a scatter plot of height vs width. Each plot should include a title, and there should
+            # be a main title for the entire figure, indicating the dataset and organ. For the scatter plot, the color
+            # of each point should be different depending on whether the point is an outlier or not.
+            fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+            fig.suptitle("{} - {}".format(dataset, organ))
+            sns.boxplot(x="area", data=info, ax=axes[0, 0])
+            axes[0, 0].title.set_text("Area")
+            sns.boxplot(x="height", data=info, ax=axes[0, 1])
+            axes[0, 1].title.set_text("Height")
+            sns.boxplot(x="width", data=info, ax=axes[1, 0])
+            axes[1, 0].title.set_text("Width")
+            sns.scatterplot(x="height", y="width", data=info, hue="outlier", ax=axes[1, 1])
+            axes[1, 1].title.set_text("Height vs Width")
+            plt.show()
