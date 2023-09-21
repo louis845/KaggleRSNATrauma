@@ -186,11 +186,10 @@ def initialize_async_organ_sampler(sampling_depth,
                                                 target_height=target_height))
 
 def clean_and_destroy_organ_sampler():
-    global slice_region_depth, loader_workers, num_loader_workers
+    global loader_workers, num_loader_workers
     for k in range(num_loader_workers):
         loader_workers[k].terminate()
     del loader_workers
-    del slice_region_depth
     del num_loader_workers
 
 def load_image(patient_ids: list,
