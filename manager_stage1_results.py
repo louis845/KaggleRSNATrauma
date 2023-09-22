@@ -149,8 +149,6 @@ class Stage1ResultsManager:
         dest_segmentation_eval_folder = os.path.join(dest_eval_folder, self.dataset_name)
         if not os.path.isdir(dest_segmentation_dataset_folder):
             os.makedirs(dest_segmentation_dataset_folder)
-        if not os.path.isdir(dest_segmentation_eval_folder):
-            os.makedirs(dest_segmentation_eval_folder)
 
         # copy all files of self.segmentation_dataset_folder ending with .hdf5 to dest_segmentation_dataset_folder
         for filename in os.listdir(self.segmentation_dataset_folder):
@@ -158,7 +156,7 @@ class Stage1ResultsManager:
                 shutil.copyfile(os.path.join(self.segmentation_dataset_folder, filename),
                                 os.path.join(dest_segmentation_dataset_folder, filename))
 
-        for series_id in self.series:
+        for series_id in tqdm.tqdm(self.series):
             organ_info = pd.read_csv(os.path.join(self.segmentation_dataset_folder, str(series_id) + ".csv"), index_col=0)
             organ_location_copy_map(self.dataset_name, series_id, organ_info, dest_segmentation_dataset_folder)
 
