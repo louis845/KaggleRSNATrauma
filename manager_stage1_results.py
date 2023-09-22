@@ -1,4 +1,6 @@
 import os
+import shutil
+import typing
 
 import pandas as pd
 import numpy as np
@@ -137,6 +139,31 @@ class Stage1ResultsManager:
                     s1.append(series[1])
                     s2.append(series[0])
         return s1, s2
+
+    def create_copy(self, dest_results_foler, dest_eval_folder,
+                    organ_location_copy_map: typing.Callable[[str, int, pd.DataFrame, str], None]):
+        # the organ_location_copy_map function is called for each series_id in self.series
+        # it should handle copying of the series_id.csv file and reformat it to transformed organ locations
+        # it is called via organ_location_copy_map(dataset_name: str, series_id: int, organs_info: pd.DataFrame, dest_folder: str)
+        dest_segmentation_dataset_folder = os.path.join(dest_results_foler, self.dataset_name)
+        dest_segmentation_eval_folder = os.path.join(dest_eval_folder, self.dataset_name)
+        if not os.path.isdir(dest_segmentation_dataset_folder):
+            os.makedirs(dest_segmentation_dataset_folder)
+        if not os.path.isdir(dest_segmentation_eval_folder):
+            os.makedirs(dest_segmentation_eval_folder)
+
+        # copy all files of self.segmentation_dataset_folder ending with .hdf5 to dest_segmentation_dataset_folder
+        for filename in os.listdir(self.segmentation_dataset_folder):
+            if filename.endswith(".hdf5"):
+                shutil.copyfile(os.path.join(self.segmentation_dataset_folder, filename),
+                                os.path.join(dest_segmentation_dataset_folder, filename))
+
+        for series_id in self.series:
+            organ_info = pd.read_csv(os.path.join(self.segmentation_dataset_folder, str(series_id) + ".csv"), index_col=0)
+            organ_location_copy_map(self.dataset_name, series_id, organ_info, dest_segmentation_dataset_folder)
+
+        # copy the contents of self.segmentation_eval_folder to dest_segmentation_eval_folder
+        shutil.copytree(self.segmentation_eval_folder, dest_segmentation_eval_folder)
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
