@@ -245,8 +245,12 @@ class ResNet3DClassifier(torch.nn.Module):
 
         self.pyr_height = len(res_conv_blocks)
         self.outpool = torch.nn.AdaptiveAvgPool2d(1)
-        self.outconv = torch.nn.Conv2d(channel_progression[-1] * input_depth * 2,
-                                       out_classes, kernel_size=1, bias=True)
+        if input_single_image:
+            self.outconv = torch.nn.Conv2d(channel_progression[-1] * input_depth,
+                                           out_classes, kernel_size=1, bias=True)
+        else:
+            self.outconv = torch.nn.Conv2d(channel_progression[-1] * input_depth * 2,
+                                           out_classes, kernel_size=1, bias=True)
 
         self.pos_embeddings_input = pos_embeddings_input
         self.conv3d_blocks = conv3d_blocks
