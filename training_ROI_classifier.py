@@ -78,37 +78,55 @@ def training_step(record: bool):
             series1, series2 = train_stage1_results.get_dual_series(batch_entries, organ_id=organ_id)
 
             # sample now
-            if use_async_sampler:
-                image_batch1 = image_organ_sampler_async.load_image(batch_entries,
-                                                              series1,
-                                                              organ_id, organ_size[0], organ_size[1],
-                                                              train_stage1_results,
-                                                              volume_depth,
-                                                              translate_rotate_augmentation=not disable_rotpos_augmentation,
-                                                              elastic_augmentation=not disable_elastic_augmentation)
-                image_batch2 = image_organ_sampler_async.load_image(batch_entries,
-                                                              series2,
-                                                              organ_id, organ_size[0], organ_size[1],
-                                                              train_stage1_results,
-                                                              volume_depth,
-                                                              translate_rotate_augmentation=not disable_rotpos_augmentation,
-                                                              elastic_augmentation=not disable_elastic_augmentation)
+            if use_single_image:
+                if use_async_sampler:
+                    image_batch = image_organ_sampler_async.load_image(batch_entries,
+                                                                  series1,
+                                                                  organ_id, organ_size[0], organ_size[1],
+                                                                  train_stage1_results,
+                                                                  sampling_depth,
+                                                                  translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                                  elastic_augmentation=not disable_elastic_augmentation)
+                else:
+                    image_batch = image_organ_sampler.load_image(batch_entries,
+                                                   series1,
+                                                   organ_id, organ_size[0], organ_size[1],
+                                                   train_stage1_results,
+                                                   sampling_depth,
+                                                   translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                   elastic_augmentation=not disable_elastic_augmentation)
             else:
-                image_batch1 = image_organ_sampler.load_image(batch_entries,
-                                               series1,
-                                               organ_id, organ_size[0], organ_size[1],
-                                               train_stage1_results,
-                                               volume_depth,
-                                               translate_rotate_augmentation=not disable_rotpos_augmentation,
-                                               elastic_augmentation=not disable_elastic_augmentation)
-                image_batch2 = image_organ_sampler.load_image(batch_entries,
-                                               series2,
-                                               organ_id, organ_size[0], organ_size[1],
-                                               train_stage1_results,
-                                               volume_depth,
-                                               translate_rotate_augmentation=not disable_rotpos_augmentation,
-                                               elastic_augmentation=not disable_elastic_augmentation)
-            image_batch = torch.cat([image_batch1, image_batch2], dim=2)
+                if use_async_sampler:
+                    image_batch1 = image_organ_sampler_async.load_image(batch_entries,
+                                                                  series1,
+                                                                  organ_id, organ_size[0], organ_size[1],
+                                                                  train_stage1_results,
+                                                                  volume_depth,
+                                                                  translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                                  elastic_augmentation=not disable_elastic_augmentation)
+                    image_batch2 = image_organ_sampler_async.load_image(batch_entries,
+                                                                  series2,
+                                                                  organ_id, organ_size[0], organ_size[1],
+                                                                  train_stage1_results,
+                                                                  volume_depth,
+                                                                  translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                                  elastic_augmentation=not disable_elastic_augmentation)
+                else:
+                    image_batch1 = image_organ_sampler.load_image(batch_entries,
+                                                   series1,
+                                                   organ_id, organ_size[0], organ_size[1],
+                                                   train_stage1_results,
+                                                   volume_depth,
+                                                   translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                   elastic_augmentation=not disable_elastic_augmentation)
+                    image_batch2 = image_organ_sampler.load_image(batch_entries,
+                                                   series2,
+                                                   organ_id, organ_size[0], organ_size[1],
+                                                   train_stage1_results,
+                                                   volume_depth,
+                                                   translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                   elastic_augmentation=not disable_elastic_augmentation)
+                image_batch = torch.cat([image_batch1, image_batch2], dim=2)
             if using_resnet:
                 image_batch = image_batch.squeeze(1)  # (N, 1, 2 * D, H, W) -> (N, 2 * D, H, W)
             labels_batch = torch.tensor(get_labels(batch_entries), device=config.device, dtype=torch.float32)
@@ -158,38 +176,57 @@ def validation_step():
             series1, series2 = val_stage1_results.get_dual_series(batch_entries, organ_id=organ_id)
 
             # sample now
-            if use_async_sampler:
-                image_batch1 = image_organ_sampler_async.load_image(batch_entries,
-                                                              series1,
-                                                              organ_id, organ_size[0], organ_size[1],
-                                                              val_stage1_results,
-                                                              volume_depth,
-                                                              translate_rotate_augmentation=False,
-                                                              elastic_augmentation=False)
-                image_batch2 = image_organ_sampler_async.load_image(batch_entries,
-                                                              series2,
-                                                              organ_id, organ_size[0], organ_size[1],
-                                                              val_stage1_results,
-                                                              volume_depth,
-                                                              translate_rotate_augmentation=False,
-                                                              elastic_augmentation=False)
+            if use_single_image:
+                if use_async_sampler:
+                    image_batch = image_organ_sampler_async.load_image(batch_entries,
+                                                                  series1,
+                                                                  organ_id, organ_size[0], organ_size[1],
+                                                                  val_stage1_results,
+                                                                  sampling_depth,
+                                                                  translate_rotate_augmentation=False,
+                                                                  elastic_augmentation=False)
+                else:
+                    image_batch = image_organ_sampler.load_image(batch_entries,
+                                                   series1,
+                                                   organ_id, organ_size[0], organ_size[1],
+                                                   val_stage1_results,
+                                                   sampling_depth,
+                                                   translate_rotate_augmentation=False,
+                                                   elastic_augmentation=False)
             else:
-                image_batch1 = image_organ_sampler.load_image(batch_entries,
-                                               series1,
-                                               organ_id, organ_size[0], organ_size[1],
-                                               val_stage1_results,
-                                               volume_depth,
-                                               translate_rotate_augmentation=False,
-                                               elastic_augmentation=False)
-                image_batch2 = image_organ_sampler.load_image(batch_entries,
-                                               series2,
-                                               organ_id, organ_size[0], organ_size[1],
-                                               val_stage1_results,
-                                               volume_depth,
-                                               translate_rotate_augmentation=False,
-                                               elastic_augmentation=False)
-            with torch.no_grad():
+                if use_async_sampler:
+                    image_batch1 = image_organ_sampler_async.load_image(batch_entries,
+                                                                  series1,
+                                                                  organ_id, organ_size[0], organ_size[1],
+                                                                  val_stage1_results,
+                                                                  volume_depth,
+                                                                  translate_rotate_augmentation=False,
+                                                                  elastic_augmentation=False)
+                    image_batch2 = image_organ_sampler_async.load_image(batch_entries,
+                                                                  series2,
+                                                                  organ_id, organ_size[0], organ_size[1],
+                                                                  val_stage1_results,
+                                                                  volume_depth,
+                                                                  translate_rotate_augmentation=False,
+                                                                  elastic_augmentation=False)
+                else:
+                    image_batch1 = image_organ_sampler.load_image(batch_entries,
+                                                   series1,
+                                                   organ_id, organ_size[0], organ_size[1],
+                                                   val_stage1_results,
+                                                   volume_depth,
+                                                   translate_rotate_augmentation=False,
+                                                   elastic_augmentation=False)
+                    image_batch2 = image_organ_sampler.load_image(batch_entries,
+                                                   series2,
+                                                   organ_id, organ_size[0], organ_size[1],
+                                                   val_stage1_results,
+                                                   volume_depth,
+                                                   translate_rotate_augmentation=False,
+                                                   elastic_augmentation=False)
                 image_batch = torch.cat([image_batch1, image_batch2], dim=2)
+
+            with torch.no_grad():
                 if using_resnet:
                     image_batch = image_batch.squeeze(1) # (N, 1, 2 * D, H, W) -> (N, 2 * D, H, W)
                 labels_batch = torch.tensor(get_labels(batch_entries), device=config.device, dtype=torch.float32)
@@ -229,6 +266,7 @@ if __name__ == "__main__":
     parser.add_argument("--second_momentum", type=float, default=0.9995, help="Second momentum to use. Default 0.999. This would be beta2 for Adam. Ignored if SGD.")
     parser.add_argument("--disable_rotpos_augmentation", action="store_true", help="Whether to disable rotation and translation augmentation. Default False.")
     parser.add_argument("--disable_elastic_augmentation", action="store_true", help="Whether to disable elastic augmentation. Default False.")
+    parser.add_argument("--use_single_image", action="store_true", help="Whether to use single image instead of dual image. Default False.")
     parser.add_argument("--batch_size", type=int, default=9, help="Batch size. Default 9")
     parser.add_argument("--volume_depth", type=int, default=9, help="Number of slices to use per volume. Default 9.")
     parser.add_argument("--optimizer", type=str, default="adam", help="Which optimizer to use. Available options: adam, sgd. Default adam.")
@@ -295,6 +333,7 @@ if __name__ == "__main__":
     second_momentum = args.second_momentum
     disable_rotpos_augmentation = args.disable_rotpos_augmentation
     disable_elastic_augmentation = args.disable_elastic_augmentation
+    use_single_image = args.use_single_image
     batch_size = args.batch_size
     volume_depth = args.volume_depth
     optimizer_type = args.optimizer
@@ -323,15 +362,17 @@ if __name__ == "__main__":
     assert not (channel_progression is None and hidden_channels is None), "Must specify either hidden channels or channel progression."
     assert channel_progression is None or hidden_channels is None, "Cannot specify both hidden channels and channel progression."
     if channel_progression is None:
+        net_depth = (volume_depth * 2 - 1) if use_single_image else (volume_depth * 2)
         print("------------------------ Using ResNet ------------------------")
         assert hidden_channels % 4 == 0, "Hidden channels must be divisible by 4."
-        backbone = model_resnet_old.ResNetBackbone(volume_depth * 2, hidden_channels // bottleneck_factor, use_batch_norm=True,
+        backbone = model_resnet_old.ResNetBackbone(net_depth, hidden_channels // bottleneck_factor, use_batch_norm=True,
                                                    pyr_height=4, res_conv_blocks=hidden_blocks,
                                                    bottleneck_expansion=bottleneck_factor, squeeze_excitation=squeeze_excitation,
                                                    use_initial_conv=True)
         model = model_resnet_old.ResNetClassifier(backbone, hidden_channels * (2 ** (len(hidden_blocks) - 1)), out_classes=3)
         using_resnet = True
     else:
+        net_depth = (volume_depth * 2 - 1) if use_single_image else volume_depth
         print("------------------------ Using ResNet attention ------------------------")
         assert isinstance(channel_progression, list), "Channel progression must be a list."
         assert len(channel_progression) == len(hidden_blocks), "Channel progression must have same length as hidden blocks."
@@ -345,7 +386,8 @@ if __name__ == "__main__":
             conv3d_blocks=conv3d_blocks,
             res_conv_blocks=hidden_blocks,
             bottleneck_factor=bottleneck_factor,
-            input_depth=volume_depth
+            input_depth=net_depth,
+            input_single_image=use_single_image
         )
         using_resnet = False
     model = model.to(config.device)
@@ -391,6 +433,7 @@ if __name__ == "__main__":
         "second_momentum": second_momentum,
         "disable_rotpos_augmentation": disable_rotpos_augmentation,
         "disable_elastic_augmentation": disable_elastic_augmentation,
+        "use_single_image": use_single_image,
         "batch_size": batch_size,
         "volume_depth": volume_depth,
         "optimizer": optimizer_type,
@@ -421,11 +464,12 @@ if __name__ == "__main__":
     # Compile
     single_training_step_compile = torch.compile(single_training_step)
 
-    # Initialize the async sampler if necessary
+    # Initialize the async sampler if necessary, and compute the sampling depth (per image)
+    sampling_depth = volume_depth * 2 - 1 if use_single_image else volume_depth
     if use_async_sampler:
         print("Initializing async sampler....")
         image_organ_sampler_async.initialize_async_organ_sampler(
-            sampling_depth=volume_depth,
+            sampling_depth=sampling_depth,
             o_id=organ_id,
             organ_width=organ_size[1],
             organ_height=organ_size[0],
