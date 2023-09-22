@@ -254,7 +254,7 @@ def print_history(metrics_history):
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
     sizes = [ # sizes in (H, W)
-        (352, 448), # 0: liver
+        (384, 448), # 0: liver
         (320, 416), # 1: spleen
         (224, 352) # 2: kidney
     ]
@@ -267,6 +267,7 @@ if __name__ == "__main__":
     parser.add_argument("--disable_rotpos_augmentation", action="store_true", help="Whether to disable rotation and translation augmentation. Default False.")
     parser.add_argument("--disable_elastic_augmentation", action="store_true", help="Whether to disable elastic augmentation. Default False.")
     parser.add_argument("--use_single_image", action="store_true", help="Whether to use single image instead of dual image. Default False.")
+    parser.add_argument("--use_initial_downsample", action="store_true", help="Whether to use initial downsample. Default False.")
     parser.add_argument("--batch_size", type=int, default=9, help="Batch size. Default 9")
     parser.add_argument("--volume_depth", type=int, default=9, help="Number of slices to use per volume. Default 9.")
     parser.add_argument("--optimizer", type=str, default="adam", help="Which optimizer to use. Available options: adam, sgd. Default adam.")
@@ -334,6 +335,7 @@ if __name__ == "__main__":
     disable_rotpos_augmentation = args.disable_rotpos_augmentation
     disable_elastic_augmentation = args.disable_elastic_augmentation
     use_single_image = args.use_single_image
+    use_initial_downsample = args.use_initial_downsample
     batch_size = args.batch_size
     volume_depth = args.volume_depth
     optimizer_type = args.optimizer
@@ -387,7 +389,8 @@ if __name__ == "__main__":
             res_conv_blocks=hidden_blocks,
             bottleneck_factor=bottleneck_factor,
             input_depth=net_depth,
-            input_single_image=use_single_image
+            input_single_image=use_single_image,
+            initial_downsampling=use_initial_downsample,
         )
         using_resnet = False
     model = model.to(config.device)
@@ -434,6 +437,7 @@ if __name__ == "__main__":
         "disable_rotpos_augmentation": disable_rotpos_augmentation,
         "disable_elastic_augmentation": disable_elastic_augmentation,
         "use_single_image": use_single_image,
+        "use_initial_downsample": use_initial_downsample,
         "batch_size": batch_size,
         "volume_depth": volume_depth,
         "optimizer": optimizer_type,

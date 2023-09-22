@@ -212,7 +212,8 @@ class ResConv2D(torch.nn.Module):
 class ResNet3DClassifier(torch.nn.Module):
     def __init__(self, in_channels: int, out_classes: int, channel_progression: list[int]=[4, 8, 16, 32, 64, 128],
                  conv3d_blocks=[0, 0, 0, 1, 1, 2], res_conv_blocks=[1, 2, 6, 8, 23, 8], bottleneck_factor=1,
-                 input_depth=9, input_single_image=False, pos_embeddings_input=False):
+                 input_depth=9, input_single_image=False, pos_embeddings_input=False,
+                 initial_downsampling=False):
         super(ResNet3DClassifier, self).__init__()
 
         assert len(res_conv_blocks) == len(conv3d_blocks), "res_conv_blocks and res_conv3d_blocks must have the same length"
@@ -221,8 +222,12 @@ class ResNet3DClassifier(torch.nn.Module):
             assert k in [0, 1, 2], "conv3d_blocks must only contain 0, 1 or 2"
         self.convs = torch.nn.ModuleList()
 
-        self.initial_conv = torch.nn.Conv3d(in_channels, channel_progression[0], kernel_size=(1, 7, 7),
-                                            bias=False, padding="same", padding_mode="replicate")
+        if initial_downsampling:
+            self.initial_conv = torch.nn.Conv3d(in_channels, channel_progression[0], kernel_size=(1, 10, 10),
+                                                stride=(1, 2, 2), bias=False, padding=(0, 4, 4), padding_mode="replicate")
+        else:
+            self.initial_conv = torch.nn.Conv3d(in_channels, channel_progression[0], kernel_size=(1, 7, 7),
+                                                bias=False, padding="same", padding_mode="replicate")
         self.initial_batchnorm = torch.nn.InstanceNorm3d(channel_progression[0], affine=True)
         self.initial_nonlin = torch.nn.GELU()
 
