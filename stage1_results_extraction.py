@@ -68,7 +68,7 @@ def copy_mapping(dataset_name:str, series_id: int, organs_info: pd.DataFrame, de
                 os.makedirs(transformed_img_folder)
 
             # Copy the images
-            collapsed_nearest_indices, repeats = image_ROI_sampler.consecutive_repeats(nearest_slice_indices)
+            collapsed_nearest_indices = np.unique(nearest_slice_indices)
             cropped_3d = ct_3D_image["ct_3D_image"][collapsed_nearest_indices, ...]
             cropped_z_poses = z_poses[collapsed_nearest_indices]
 
@@ -77,8 +77,8 @@ def copy_mapping(dataset_name:str, series_id: int, organs_info: pd.DataFrame, de
             np.save(os.path.join(transformed_img_folder, "z_positions.npy"), cropped_z_poses)
 
             # Set new limits
-            organs_info.loc[organs[organ_id], "left"] = 0
-            organs_info.loc[organs[organ_id], "right"] = len(collapsed_nearest_indices) - 1
+            organs_info.loc[organs[organ_id], "left"] = image_ROI_sampler.find_closest_single(cropped_z_poses, z_min)
+            organs_info.loc[organs[organ_id], "right"] = image_ROI_sampler.find_closest_single(cropped_z_poses, z_max)
 
             # Make labels
             organ_segmentations = []
