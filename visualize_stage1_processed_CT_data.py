@@ -3,7 +3,6 @@ import os
 import numpy as np
 import pandas as pd
 
-os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH")
 import h5py
 import pandas as pd
 
@@ -80,14 +79,13 @@ class ProcessedStage1CTViewer(QMainWindow):
 
         self.ct_3D_image = ct_3D_image
         self.z_positions = z_positions
-        self.segmentation_image = None
+        self.segmentation_image = segmentation_image
         self.organ_left = organ_left
         self.organ_right = organ_right
         self.rot_options_length = segmentation_image.shape[1]
         self.rot_options = 0
 
         self.setup_ui()
-        self.setup_folders()
         self.setup_connections()
 
     def setup_ui(self):
@@ -133,6 +131,7 @@ class ProcessedStage1CTViewer(QMainWindow):
         # Add the slider and label to the main panel
         self.main_panel_layout = QVBoxLayout()
         self.main_panel_layout.addWidget(self.image_canvas)
+        self.main_panel_layout.addWidget(self.rot_options_dropdown)
         self.main_panel_layout.addWidget(self.slice_info_renderer)
         self.main_panel_layout.addWidget(self.slice_number_label)
         self.main_panel_layout.addWidget(self.slice_number_slider)
@@ -143,7 +142,6 @@ class ProcessedStage1CTViewer(QMainWindow):
     def setup_connections(self):
         self.slice_number_slider.valueChanged.connect(self.slice_number_updated)
         self.rot_options_dropdown.currentIndexChanged.connect(self.rot_options_changed)
-        self.tree_view.doubleClicked.connect(self.tree_view_double_clicked)
 
     def slice_number_updated(self, value: int):
         if self.z_positions is None:
