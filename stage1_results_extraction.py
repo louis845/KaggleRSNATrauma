@@ -131,7 +131,7 @@ if __name__ == "__main__":
         segmentator = stage1_organ_segmentation.OrganSegmentator(channel_progression=args.channel_progression, res_conv3d_blocks=args.hidden3d_blocks,
                                                                  res_conv_blocks=args.hidden_blocks, bottleneck_factor=args.bottleneck_factor,
                                                                  squeeze_excitation=args.squeeze_excitation, device=config.device)
-        segmentator.load_checkpoint(models[k])
+        segmentator.load_checkpoint(os.path.join("models", models[k]))
         mgr = manager_stage1_results.Stage1ResultsManager(datasets[k])
         mgr.create_copy(seg_results_fldr, seg_eval_fldr, copy_mapping)
         segmentator.close()
