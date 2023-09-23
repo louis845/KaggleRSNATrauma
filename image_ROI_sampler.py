@@ -42,6 +42,13 @@ def find_closest(Z: np.ndarray, x: np.ndarray):
 def find_closest_single(Z: np.ndarray, x: float):
     """Given Z and x, find the index i such that Z[i] is the closest element to x"""
     # find the index i such that Z[i] is the first element greater than or equal to x
+    assert np.all(np.diff(Z) >= 0) or np.all(np.diff(Z) <= 0), "Z must be sorted"
+    if np.all(np.diff(Z) <= 0):
+        flipped = True
+        Z = Z[::-1]
+    else:
+        flipped = False
+
     i = np.searchsorted(Z, x)
     # Handle cases where x is greater than all elements in Z
     if i == len(Z):
@@ -49,6 +56,9 @@ def find_closest_single(Z: np.ndarray, x: float):
     # If x is closer to Z[i - 1] than Z[i], decrement i
     if i > 0 and np.abs(Z[i - 1] - x) <= np.abs(Z[i] - x):
         i -= 1
+
+    if flipped:
+        i = len(Z) - 1 - i
     return i
 
 def consecutive_repeats(arr):
