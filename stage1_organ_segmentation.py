@@ -1,4 +1,5 @@
 import torch
+import torchvision.transforms.functional as F
 import h5py
 import numpy as np
 import os
@@ -220,6 +221,65 @@ class OrganSegmentator():
         # the shape should be (batch_size, 4, H, W)
         assert preds.shape[:2] == (len(slice_idxs), 4)
         return preds
+
+    def predict_segmentation_at_slices(self, slice_idxs: np.ndarray, organ_id: int, stride_mm: int=5, depth: int=9, rotation=0.0):
+        assert self.model_loaded, "Please load the model checkpoint first."
+        assert self.data_loaded, "Please load the data first."
+        assert depth % 2 == 1, "depth must be an odd number"
+
+        image_tensor = self.load_image_from_slice_indices(slice_idxs, stride_mm, depth)
+        # the shape should be (batch_size, 1, D, H, W)
+        assert image_tensor.shape == (len(slice_idxs), 1, depth, self.loaded_data_H, self.loaded_data_W)
+
+        resize_strategy = self.get_resize_strategy()
+        with torch.no_grad():
+            # pad or crop hw
+            if resize_strategy["H"]["mode"] == "crop":
+                image_tensor = image_tensor[..., resize_strategy["H"]["start"]:resize_strategy["H"]["end"], :]
+            else:
+                image_tensor = torch.nn.functional.pad(image_tensor, (
+                0, 0, resize_strategy["H"]["start"], resize_strategy["H"]["end"]))
+            if resize_strategy["W"]["mode"] == "crop":
+                image_tensor = image_tensor[..., resize_strategy["W"]["start"]:resize_strategy["W"]["end"]]
+            else:
+                image_tensor = torch.nn.functional.pad(image_tensor,
+                                                       (resize_strategy["W"]["start"], resize_strategy["W"]["end"]))
+            assert image_tensor.shape == (len(slice_idxs), 1, depth, 512, 576)
+
+            # rotate
+            if rotation != 0.0:
+                image_tensor = F.rotate(image_tensor.squeeze(1), angle=rotation).unsqueeze(1)
+
+            assert image_tensor.shape == (len(slice_idxs), 1, depth, 512, 576)
+
+            # predict
+            preds = model_predict_compile(self.model, image_tensor)[:, organ_id, ...].to(torch.float32)
+
+            # upscale to size fed into model
+            preds = torch.repeat_interleave(torch.repeat_interleave(preds, repeats=32, dim=-1), repeats=32, dim=-2).unsqueeze(1)
+            assert preds.shape == (len(slice_idxs), 1, 512, 576)
+
+            # rotate back
+            if rotation != 0.0:
+                preds = F.rotate(preds, angle=-rotation)
+
+            # revert pad or crop hw
+            if resize_strategy["H"]["mode"] == "crop":
+                pad_top = resize_strategy["H"]["start"]
+                pad_bottom = self.loaded_data_H - resize_strategy["H"]["end"]
+                preds = torch.nn.functional.pad(preds, (0, 0, pad_top, pad_bottom))
+            else:
+                preds = preds[:, :, resize_strategy["H"]["start"]:-resize_strategy["H"]["end"], :]
+            if resize_strategy["W"]["mode"] == "crop":
+                pad_left = resize_strategy["W"]["start"]
+                pad_right = self.loaded_data_W - resize_strategy["W"]["end"]
+                preds = torch.nn.functional.pad(preds, (pad_left, pad_right))
+            else:
+                preds = preds[:, :, :, resize_strategy["W"]["start"]:-resize_strategy["W"]["end"]]
+
+        assert preds.shape == (len(slice_idxs), 1, self.loaded_data_H, self.loaded_data_W)
+        return preds.cpu().numpy().astype(dtype=np.uint8)
+
 
     @staticmethod
     def reduce_slice(preds):
