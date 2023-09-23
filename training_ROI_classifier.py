@@ -79,32 +79,36 @@ def training_step(record: bool):
 
             # sample now
             if use_single_image:
-                if use_async_sampler:
-                    image_batch = image_organ_sampler_async.load_image(batch_entries,
-                                                                  series1,
-                                                                  organ_id, organ_size[0], organ_size[1],
-                                                                  train_stage1_results,
-                                                                  sampling_depth,
-                                                                  translate_rotate_augmentation=not disable_rotpos_augmentation,
-                                                                  elastic_augmentation=not disable_elastic_augmentation)
+                if use_cutmix:
+                    pass
+                    # TODO: implement cutmix
                 else:
-                    image_batch = image_organ_sampler.load_image(batch_entries,
-                                                   series1,
-                                                   organ_id, organ_size[0], organ_size[1],
-                                                   train_stage1_results,
-                                                   sampling_depth,
-                                                   translate_rotate_augmentation=not disable_rotpos_augmentation,
-                                                   elastic_augmentation=not disable_elastic_augmentation)
+                    if use_async_sampler:
+                        image_batch, _ = image_organ_sampler_async.load_image(batch_entries,
+                                                                      series1,
+                                                                      organ_id, organ_size[0], organ_size[1],
+                                                                      train_stage1_results,
+                                                                      sampling_depth,
+                                                                      translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                                      elastic_augmentation=not disable_elastic_augmentation)
+                    else:
+                        image_batch, _ = image_organ_sampler.load_image(batch_entries,
+                                                       series1,
+                                                       organ_id, organ_size[0], organ_size[1],
+                                                       train_stage1_results,
+                                                       sampling_depth,
+                                                       translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                       elastic_augmentation=not disable_elastic_augmentation)
             else:
                 if use_async_sampler:
-                    image_batch1 = image_organ_sampler_async.load_image(batch_entries,
+                    image_batch1, _ = image_organ_sampler_async.load_image(batch_entries,
                                                                   series1,
                                                                   organ_id, organ_size[0], organ_size[1],
                                                                   train_stage1_results,
                                                                   volume_depth,
                                                                   translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                                   elastic_augmentation=not disable_elastic_augmentation)
-                    image_batch2 = image_organ_sampler_async.load_image(batch_entries,
+                    image_batch2, _ = image_organ_sampler_async.load_image(batch_entries,
                                                                   series2,
                                                                   organ_id, organ_size[0], organ_size[1],
                                                                   train_stage1_results,
@@ -112,14 +116,14 @@ def training_step(record: bool):
                                                                   translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                                   elastic_augmentation=not disable_elastic_augmentation)
                 else:
-                    image_batch1 = image_organ_sampler.load_image(batch_entries,
+                    image_batch1, _ = image_organ_sampler.load_image(batch_entries,
                                                    series1,
                                                    organ_id, organ_size[0], organ_size[1],
                                                    train_stage1_results,
                                                    volume_depth,
                                                    translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                    elastic_augmentation=not disable_elastic_augmentation)
-                    image_batch2 = image_organ_sampler.load_image(batch_entries,
+                    image_batch2, _ = image_organ_sampler.load_image(batch_entries,
                                                    series2,
                                                    organ_id, organ_size[0], organ_size[1],
                                                    train_stage1_results,
@@ -178,7 +182,7 @@ def validation_step():
             # sample now
             if use_single_image:
                 if use_async_sampler:
-                    image_batch = image_organ_sampler_async.load_image(batch_entries,
+                    image_batch, _ = image_organ_sampler_async.load_image(batch_entries,
                                                                   series1,
                                                                   organ_id, organ_size[0], organ_size[1],
                                                                   val_stage1_results,
@@ -186,7 +190,7 @@ def validation_step():
                                                                   translate_rotate_augmentation=False,
                                                                   elastic_augmentation=False)
                 else:
-                    image_batch = image_organ_sampler.load_image(batch_entries,
+                    image_batch, _ = image_organ_sampler.load_image(batch_entries,
                                                    series1,
                                                    organ_id, organ_size[0], organ_size[1],
                                                    val_stage1_results,
@@ -195,14 +199,14 @@ def validation_step():
                                                    elastic_augmentation=False)
             else:
                 if use_async_sampler:
-                    image_batch1 = image_organ_sampler_async.load_image(batch_entries,
+                    image_batch1, _ = image_organ_sampler_async.load_image(batch_entries,
                                                                   series1,
                                                                   organ_id, organ_size[0], organ_size[1],
                                                                   val_stage1_results,
                                                                   volume_depth,
                                                                   translate_rotate_augmentation=False,
                                                                   elastic_augmentation=False)
-                    image_batch2 = image_organ_sampler_async.load_image(batch_entries,
+                    image_batch2, _ = image_organ_sampler_async.load_image(batch_entries,
                                                                   series2,
                                                                   organ_id, organ_size[0], organ_size[1],
                                                                   val_stage1_results,
@@ -210,14 +214,14 @@ def validation_step():
                                                                   translate_rotate_augmentation=False,
                                                                   elastic_augmentation=False)
                 else:
-                    image_batch1 = image_organ_sampler.load_image(batch_entries,
+                    image_batch1, _ = image_organ_sampler.load_image(batch_entries,
                                                    series1,
                                                    organ_id, organ_size[0], organ_size[1],
                                                    val_stage1_results,
                                                    volume_depth,
                                                    translate_rotate_augmentation=False,
                                                    elastic_augmentation=False)
-                    image_batch2 = image_organ_sampler.load_image(batch_entries,
+                    image_batch2, _ = image_organ_sampler.load_image(batch_entries,
                                                    series2,
                                                    organ_id, organ_size[0], organ_size[1],
                                                    val_stage1_results,
@@ -267,6 +271,7 @@ if __name__ == "__main__":
     parser.add_argument("--disable_rotpos_augmentation", action="store_true", help="Whether to disable rotation and translation augmentation. Default False.")
     parser.add_argument("--disable_elastic_augmentation", action="store_true", help="Whether to disable elastic augmentation. Default False.")
     parser.add_argument("--use_single_image", action="store_true", help="Whether to use single image instead of dual image. Default False.")
+    parser.add_argument("--use_cutmix", action="store_true", help="Whether to use cutmix. Default False.")
     parser.add_argument("--use_initial_downsample", action="store_true", help="Whether to use initial downsample. Default False.")
     parser.add_argument("--batch_size", type=int, default=9, help="Batch size. Default 9")
     parser.add_argument("--volume_depth", type=int, default=9, help="Number of slices to use per volume. Default 9.")
@@ -302,7 +307,12 @@ if __name__ == "__main__":
     print("Training dataset: {}".format(train_dset_name))
     print("Validation dataset: {}".format(val_dset_name))
 
-    train_stage1_results = manager_stage1_results.Stage1ResultsManager(train_dset_name)
+    if args.use_cutmix:
+        assert args.single_image, "Cutmix requires single image."
+        SEGMENTATION_RESULTS_FOLDER_OVERRIDE = "EXTRACTED_STAGE1_RESULTS/stage1_organ_segmentator"
+    else:
+        SEGMENTATION_RESULTS_FOLDER_OVERRIDE = None
+    train_stage1_results = manager_stage1_results.Stage1ResultsManager(train_dset_name, SEGMENTATION_RESULTS_FOLDER_OVERRIDE=SEGMENTATION_RESULTS_FOLDER_OVERRIDE)
     val_stage1_results = manager_stage1_results.Stage1ResultsManager(val_dset_name)
     train_stage1_results.validate_patient_ids_contained(training_entries)
     val_stage1_results.validate_patient_ids_contained(validation_entries)
@@ -335,6 +345,7 @@ if __name__ == "__main__":
     disable_rotpos_augmentation = args.disable_rotpos_augmentation
     disable_elastic_augmentation = args.disable_elastic_augmentation
     use_single_image = args.use_single_image
+    use_cutmix = args.use_cutmix
     use_initial_downsample = args.use_initial_downsample
     batch_size = args.batch_size
     volume_depth = args.volume_depth
@@ -355,6 +366,7 @@ if __name__ == "__main__":
     print("Second momentum: " + str(second_momentum))
     print("Disable rotation and translation augmentation: " + str(disable_rotpos_augmentation))
     print("Disable elastic augmentation: " + str(disable_elastic_augmentation))
+    print("Cutmix augmentation: " + str(use_cutmix))
     print("Batch size: " + str(batch_size))
     model_resnet_old.BATCH_NORM_MOMENTUM = 1 - momentum
 
@@ -437,6 +449,7 @@ if __name__ == "__main__":
         "disable_rotpos_augmentation": disable_rotpos_augmentation,
         "disable_elastic_augmentation": disable_elastic_augmentation,
         "use_single_image": use_single_image,
+        "use_cutmix": use_cutmix,
         "use_initial_downsample": use_initial_downsample,
         "batch_size": batch_size,
         "volume_depth": volume_depth,

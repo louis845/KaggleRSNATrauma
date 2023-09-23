@@ -21,6 +21,7 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                              target_width: int, target_height: int,
                              image_available_lock: multiprocessing.Lock,
                              image_required_flag: multiprocessing.Value,
+                             has_segmentation_flag: multiprocessing.Value,
                              worker_name: str, buffer_max_size: 5):
     try:
         print("Subprocess {} starting...".format(worker_name))
@@ -30,6 +31,9 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
 
         image_shared_memory = multiprocessing.shared_memory.SharedMemory(create=False, name="{}_image".format(worker_name))
         image_shared_memory_array = np.ndarray((organ_sampling_depth, target_height, target_width), dtype=np.float32, buffer=image_shared_memory.buf)
+
+        organ_segmentation_shared_memory = multiprocessing.shared_memory.SharedMemory(create=False, name="{}_organ_seg".format(worker_name))
+        organ_segmentation_shared_memory_array = np.ndarray((organ_sampling_depth, target_height, target_width), dtype=np.float32, buffer=organ_segmentation_shared_memory.buf)
 
         organ_loc_shared_memory = multiprocessing.shared_memory.SharedMemory(create=False, name="{}_organ".format(worker_name))
         organ_loc_shared_memory_array = np.ndarray((target_height, target_width), dtype=bool, buffer=image_shared_memory.buf)
@@ -52,18 +56,22 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 min_slice = int(load_info["min_slice"])
                 max_slice = int(load_info["max_slice"])
                 segmentation_dataset_folder = str(load_info["segmentation_dataset_folder"])
+                data_hdf5_cropped_folder = str(load_info["data_hdf5_cropped_folder"])
                 elastic_augmentation = bool(load_info["elastic_augmentation"])
+                load_perslice_segmentation = bool(load_info["load_perslice_segmentation"])
 
-                image, organ_location = image_organ_sampler.load_series_image_and_organloc_from_minmax(
+                image, organ_location, organ_segmentation = image_organ_sampler.load_series_image_and_organloc_from_minmax(
                     patient_id,
                     series_id,
                     organ_id, organ_sampling_depth,
                     min_slice, max_slice,
                     target_width, target_height,
                     segmentation_dataset_folder,
-                    elastic_augmentation)
+                    data_hdf5_cropped_folder,
+                    elastic_augmentation,
+                    load_perslice_segmentation)
 
-                buffered_images.append({"image": image, "organ_location": organ_location})
+                buffered_images.append({"image": image, "organ_location": organ_location, "organ_segmentation": organ_segmentation})
 
             # if buffer not empty, and image required, load image from buffer
             if image_required_flag.value and (len(buffered_images) > 0):
@@ -74,6 +82,9 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
                 image_data = buffered_images.pop(0)
                 image_shared_memory_array[:, :, :] = image_data["image"]
                 organ_loc_shared_memory_array[:, :] = image_data["organ_location"]
+                has_segmentation_flag.value = image_data["organ_segmentation"] is not None
+                if has_segmentation_flag.value:
+                    organ_segmentation_shared_memory_array[:, :, :] = image_data["organ_segmentation"]
 
                 # release lock
                 image_available_lock.release()
@@ -88,6 +99,7 @@ def image_loading_subprocess(image_loading_pipe_recv, running: multiprocessing.V
         print("Subprocess interrupted....")
 
     image_shared_memory.close()
+    organ_segmentation_shared_memory.close()
     organ_loc_shared_memory.close()
     print("Subprocess terminated.")
 
@@ -110,6 +122,11 @@ class SliceLoaderWorker:
         del img
         self.image_shared_memory_array = np.ndarray((organ_sampling_depth, target_height, target_width), dtype=np.float32, buffer=self.image_shared_memory.buf)
 
+        organ_slice_loc = np.zeros((organ_sampling_depth, target_height, target_width), dtype=np.float32)
+        self.organ_segmentation_shared_memory = multiprocessing.shared_memory.SharedMemory(create=True, size=organ_slice_loc.nbytes, name="{}_organ_seg".format(worker_name))
+        del organ_slice_loc
+        self.organ_segmentation_shared_memory_array = np.ndarray((organ_sampling_depth, target_height, target_width), dtype=np.float32, buffer=self.organ_segmentation_shared_memory.buf)
+
         organ_loc = np.zeros((target_height, target_width), dtype=bool)
         self.organ_loc_shared_memory = multiprocessing.shared_memory.SharedMemory(create=True, size=organ_loc.nbytes,
                                                                               name="{}_organ".format(worker_name))
@@ -117,12 +134,15 @@ class SliceLoaderWorker:
         self.organ_loc_shared_memory_array = np.ndarray((target_height, target_width),
                                                     dtype=bool, buffer=self.organ_loc_shared_memory.buf)
 
+        self.has_segmentation_flag = multiprocessing.Value(ctypes.c_bool, False)
+
         self.process = multiprocessing.Process(target=image_loading_subprocess,
                                                args=(image_loading_pipe_recv, self.running,
                                                     organ_sampling_depth, organ_id,
                                                     target_width, target_height,
                                                     self.image_available_lock,
-                                                    self.image_required_flag, worker_name, 5))
+                                                    self.image_required_flag, self.has_segmentation_flag,
+                                                     worker_name, 5))
         self.process.start()
 
     def terminate(self):
@@ -134,21 +154,27 @@ class SliceLoaderWorker:
         self.organ_loc_shared_memory.unlink()
 
     def request_load_image(self, patient_id, series_id, min_slice: int, max_slice: int,
-                           segmentation_dataset_folder: str, elastic_augmentation: bool):
+                           segmentation_dataset_folder: str, data_hdf5_cropped_folder: str,
+                           elastic_augmentation: bool, load_perslice_segmentation: bool):
         self.image_loading_pipe_send.send({
             "patient_id": patient_id,
             "series_id": series_id,
             "min_slice": min_slice,
             "max_slice": max_slice,
             "segmentation_dataset_folder": segmentation_dataset_folder,
-            "elastic_augmentation": elastic_augmentation
+            "data_hdf5_cropped_folder": data_hdf5_cropped_folder,
+            "elastic_augmentation": elastic_augmentation,
+            "load_perslice_segmentation": load_perslice_segmentation
         })
 
     def get_requested_image(self):
         self.image_required_flag.value = True
         self.image_available_lock.acquire(block=True)
 
-        return self.image_shared_memory_array.copy(), self.organ_loc_shared_memory_array.copy()
+        if self.has_segmentation_flag:
+            return self.image_shared_memory_array.copy(), self.organ_loc_shared_memory_array.copy(), self.organ_segmentation_shared_memory_array.copy()
+        else:
+            return self.image_shared_memory_array.copy(), self.organ_loc_shared_memory_array.copy(), None
 
 
 organ_sampling_depth: int = None
@@ -198,34 +224,48 @@ def load_image(patient_ids: list,
                stage1_information: manager_stage1_results.Stage1ResultsManager,
                organ_sampling_depth=9,
                translate_rotate_augmentation=False,
-               elastic_augmentation=False) -> torch.Tensor:
+               elastic_augmentation=False,
+               load_perslice_segmentation=False,
+               data_info_folder="data_hdf5_cropped") -> tuple[torch.Tensor, torch.Tensor]:
     assert len(patient_ids) == len(series_ids), "patient_ids and series_ids must have the same length"
     assert organ_width % 32 == 0, "Organ width must be divisible by 32"
     assert organ_height % 32 == 0, "Organ height must be divisible by 32"
     batch_size = len(patient_ids)
 
-    req_rot_h, req_rot_w = target_height, target_width
+    ## Compute the required height and width
+    max_angle = 15 * np.pi / 180
+    cur_angle = np.arctan2(organ_height, organ_width)
+    diag = np.hypot(organ_height + 64.0, organ_width + 64.0)
+    req_rot_w = int(np.ceil(diag * max(np.sin(cur_angle + max_angle), np.sin(cur_angle - max_angle))))
+    req_rot_h = int(np.ceil(diag * max(np.cos(cur_angle + max_angle), np.cos(cur_angle - max_angle))))
 
     ## Load the images
     image_batch = torch.zeros((batch_size, 1, organ_sampling_depth, req_rot_h, req_rot_w), dtype=torch.float32,
                               device=config.device)
     organ_loc_batch = torch.zeros((batch_size, 1, req_rot_h, req_rot_w), dtype=torch.float32,
                                   device=config.device)
+    perslice_segmentation_batch = torch.zeros((batch_size, 1, organ_sampling_depth, req_rot_h, req_rot_w),
+                                              dtype=torch.float32,
+                                              device=config.device) if load_perslice_segmentation else None
     worker_used = 0
     for k in range(batch_size):
         organ_slice_min, organ_slice_max = stage1_information.get_organ_slicelocs(int(series_ids[k]), organ_id)
         loader_workers[worker_used % num_loader_workers].request_load_image(
             str(patient_ids[k]), str(series_ids[k]),
             organ_slice_min, organ_slice_max,
-            stage1_information.segmentation_dataset_folder, elastic_augmentation)
+            stage1_information.segmentation_dataset_folder,
+            data_info_folder,
+            elastic_augmentation, load_perslice_segmentation)
         worker_used += 1
 
     worker_used = 0
     for k in range(batch_size):
-        image, organ_location = loader_workers[worker_used % num_loader_workers].get_requested_image()
+        image, organ_location, organ_segmentation = loader_workers[worker_used % num_loader_workers].get_requested_image()
 
         image_batch[k, 0, ...].copy_(torch.from_numpy(image), non_blocking=True)
         organ_loc_batch[k, 0, ...].copy_(torch.from_numpy(organ_location), non_blocking=True)
+        if load_perslice_segmentation:
+            perslice_segmentation_batch[k, 0, ...].copy_(torch.from_numpy(organ_segmentation), non_blocking=True)
 
         worker_used += 1
 
@@ -253,6 +293,11 @@ def load_image(patient_ids: list,
                 displacement_field.view(batch_size * organ_sampling_depth, req_rot_h, req_rot_w, 2))
                                         .view(batch_size, 1, organ_sampling_depth, req_rot_h, req_rot_w) > 0.5,
                                         dim=2).float()
+            if load_perslice_segmentation:
+                perslice_segmentation_batch = image_sampler_augmentations.apply_displacement_field3D_simple(
+                    perslice_segmentation_batch.reshape(batch_size * organ_sampling_depth, 1, req_rot_h, req_rot_w),
+                    displacement_field.view(batch_size * organ_sampling_depth, req_rot_h, req_rot_w, 2)) \
+                    .view(batch_size, 1, organ_sampling_depth, req_rot_h, req_rot_w)
 
         ## Apply rotation augmentation to height width
         if translate_rotate_augmentation:
@@ -266,10 +311,18 @@ def load_image(patient_ids: list,
                 organ_loc_batch.view(batch_size, 1, 1, req_rot_h, req_rot_w), list(rotation_angles)) \
                                   .view(batch_size, req_rot_h, req_rot_w) > 0.5
 
+            if load_perslice_segmentation:
+                perslice_segmentation_batch = image_sampler_augmentations.rotate(perslice_segmentation_batch,
+                                                                                 list(rotation_angles))
+
         ## Crop the image to the desired size, and apply translation augmentation if necessary
         final_image_batch = torch.zeros((batch_size, 1, organ_sampling_depth, organ_height, organ_width),
                                         dtype=torch.float32,
                                         device=config.device)
+        if load_perslice_segmentation:
+            final_perslice_segmentation_batch = torch.zeros(
+                (batch_size, 1, organ_sampling_depth, organ_height, organ_width), dtype=torch.float32,
+                device=config.device) if load_perslice_segmentation else None
         for k in range(batch_size):
             # compute organ bounds
             heights = torch.any(organ_loc_batch[k, ...], dim=-1)
@@ -310,5 +363,9 @@ def load_image(patient_ids: list,
 
             # crop the image
             final_image_batch[k, 0, ...].copy_(image_batch[k, 0, :, y_min:y_max, x_min:x_max], non_blocking=True)
+            if load_perslice_segmentation:
+                final_perslice_segmentation_batch[k, 0, ...].copy_(
+                    perslice_segmentation_batch[k, 0, :, y_min:y_max, x_min:x_max], non_blocking=True)
 
-    return final_image_batch
+    return final_image_batch, final_perslice_segmentation_batch
+

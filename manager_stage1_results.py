@@ -13,9 +13,12 @@ SEGMENTATION_EVAL_FOLDER = "stage1_organ_segmentator_eval"
 class Stage1ResultsManager:
     organs = ["liver", "spleen", "kidney", "bowel"]
 
-    def __init__(self, dataset_name: str):
+    def __init__(self, dataset_name: str, SEGMENTATION_RESULTS_FOLDER_OVERRIDE=None):
+        main_results_folder = SEGMENTATION_RESULTS_FOLDER
+        if SEGMENTATION_RESULTS_FOLDER_OVERRIDE is not None:
+            main_results_folder = SEGMENTATION_RESULTS_FOLDER_OVERRIDE
         self.dataset_name = dataset_name
-        self.segmentation_dataset_folder = os.path.join(SEGMENTATION_RESULTS_FOLDER, dataset_name)
+        self.segmentation_dataset_folder = os.path.join(main_results_folder, dataset_name)
         self.segmentation_eval_folder = os.path.join(SEGMENTATION_EVAL_FOLDER, dataset_name)
 
         assert os.path.isdir(self.segmentation_dataset_folder), "Segmentations not available for " + dataset_name

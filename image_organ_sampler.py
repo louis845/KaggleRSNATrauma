@@ -12,7 +12,9 @@ import manager_stage1_results
 
 def load_series_image_and_organloc(patient_id: str, series_id: str, slice_indices,
                       organ_id: int, target_w: int, target_h: int,
-                      segmentation_dataset_folder: str) -> tuple[np.ndarray, np.ndarray]:
+                      segmentation_dataset_folder: str,
+                      data_hdf5_cropped_folder: str,
+                      load_perslice_segmentation: bool) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Loads the image of a series from the hdf5 file
     """
@@ -35,8 +37,9 @@ def load_series_image_and_organloc(patient_id: str, series_id: str, slice_indice
 
     ## Load the image
     collapsed_nearest_indices, repeats = image_ROI_sampler.consecutive_repeats(slice_indices)
-    with h5py.File(os.path.join("data_hdf5_cropped", patient_id, series_id, "ct_3D_image.hdf5"), "r") as f:
+    with h5py.File(os.path.join(data_hdf5_cropped_folder, patient_id, series_id, "ct_3D_image.hdf5"), "r") as f:
         ct_3D_image = f["ct_3D_image"] # shape (D, H, W)
+        original_saved_shape = tuple(ct_3D_image.shape)
         # If the required bounds are outside the image, we pad the image. First compute the pad
         pad_left = max(0, -required_minW)
         pad_right = max(0, required_maxW - ct_3D_image.shape[2])
@@ -54,16 +57,33 @@ def load_series_image_and_organloc(patient_id: str, series_id: str, slice_indice
     ## Do the same to the organ location
     organ_location = organ_location[required_minH:required_maxH, required_minW:required_maxW]
     organ_location = np.pad(organ_location, ((pad_top, pad_bottom), (pad_left, pad_right)), mode="constant", constant_values=0)
-    return image, organ_location
+
+    ## Load the segmentation if necessary
+    if load_perslice_segmentation:
+        with h5py.File(os.path.join(data_hdf5_cropped_folder, patient_id, series_id, "organ_segmentations.hdf5"), "r") as f:
+            organ_segmentation = f["organ_segmentations"]
+            organ_shape = organ_segmentation.shape
+            assert original_saved_shape == (organ_shape[0], organ_shape[2], organ_shape[3])
+            # choose random integer between 0 and organ_shape[1] - 1
+            rdrot = np.random.randint(organ_shape[1])
+            # Load and pad the segmentation
+            organ_segmentation = organ_segmentation[collapsed_nearest_indices, rdrot, required_minH:required_maxH, required_minW:required_maxW]
+        organ_segmentation = np.pad(organ_segmentation, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right)), mode="constant", constant_values=0)
+        organ_segmentation = np.repeat(organ_segmentation, repeats, axis=0) # if there is collapsing, repeat it
+    else:
+        organ_segmentation = None
+    return image, organ_location, organ_segmentation
     
 def load_series_image_and_organloc_from_minmax(patient_id: str, series_id: str,
                       organ_id: int, organ_sampling_depth: int,
                       min_slice: int, max_slice: int,
                       target_w: int, target_h: int,
                       segmentation_dataset_folder: str,
-                      elastic_augmentation: bool):
+                      data_hdf5_cropped_folder: str, # basically expected to be "data_hdf5_cropped", but can be changed in case of a local copy (e.g. for organ segmentations)
+                      elastic_augmentation: bool,
+                      load_perslice_segmentation: bool):
     # Generate the slice indices (for the depth) to sample from
-    z_poses = np.load(os.path.join("data_hdf5_cropped", str(patient_id), str(series_id), "z_positions.npy"))
+    z_poses = np.load(os.path.join(data_hdf5_cropped_folder, str(patient_id), str(series_id), "z_positions.npy"))
     is_flipped = np.mean(np.diff(z_poses)) > 0.0
     z_min, z_max = z_poses[min_slice], z_poses[max_slice]
     if elastic_augmentation:  # expand a bit randomly if elastic augmentation is used
@@ -92,13 +112,17 @@ def load_series_image_and_organloc_from_minmax(patient_id: str, series_id: str,
         nearest_slice_indices = nearest_slice_indices[::-1]
 
     # Load the image
-    image, organ_location = load_series_image_and_organloc(str(patient_id), str(series_id),
+    image, organ_location, organ_segmentation = load_series_image_and_organloc(str(patient_id), str(series_id),
                                                            nearest_slice_indices,
                                                            organ_id, target_w, target_h,
-                                                           segmentation_dataset_folder)
+                                                           segmentation_dataset_folder,
+                                                           data_hdf5_cropped_folder,
+                                                           load_perslice_segmentation=load_perslice_segmentation)
     if is_flipped:
         image = image[::-1, ...].copy()
-    return image, organ_location
+        if organ_segmentation is not None:
+            organ_segmentation = organ_segmentation[::-1, ...].copy()
+    return image, organ_location, organ_segmentation
 
 def load_image(patient_ids: list,
                series_ids: list,
@@ -106,7 +130,9 @@ def load_image(patient_ids: list,
                stage1_information: manager_stage1_results.Stage1ResultsManager,
                organ_sampling_depth = 9,
                translate_rotate_augmentation=False,
-               elastic_augmentation=False) -> torch.Tensor:
+               elastic_augmentation=False,
+               load_perslice_segmentation=False,
+               data_info_folder="data_hdf5_cropped") -> tuple[torch.Tensor, torch.Tensor]:
     assert len(patient_ids) == len(series_ids), "patient_ids and series_ids must have the same length"
     assert organ_width % 32 == 0, "Organ width must be divisible by 32"
     assert organ_height % 32 == 0, "Organ height must be divisible by 32"
@@ -125,16 +151,22 @@ def load_image(patient_ids: list,
                               device=config.device)
     organ_loc_batch = torch.zeros((batch_size, 1, req_rot_h, req_rot_w), dtype=torch.float32,
                                 device=config.device)
+    perslice_segmentation_batch = torch.zeros((batch_size, 1, organ_sampling_depth, req_rot_h, req_rot_w), dtype=torch.float32,
+                                device=config.device) if load_perslice_segmentation else None
     for k in range(batch_size):
         organ_slice_min, organ_slice_max = stage1_information.get_organ_slicelocs(int(series_ids[k]), organ_id)
-        image, organ_location = load_series_image_and_organloc_from_minmax(str(patient_ids[k]), str(series_ids[k]),
+        image, organ_location, organ_segmentation = load_series_image_and_organloc_from_minmax(str(patient_ids[k]), str(series_ids[k]),
                                                                            organ_id, organ_sampling_depth,
                                                                            organ_slice_min, organ_slice_max,
                                                                            req_rot_w, req_rot_h,
                                                                            stage1_information.segmentation_dataset_folder,
-                                                                           elastic_augmentation)
+                                                                           data_info_folder,
+                                                                           elastic_augmentation,
+                                                                           load_perslice_segmentation)
         image_batch[k, 0, ...].copy_(torch.from_numpy(image), non_blocking=True)
         organ_loc_batch[k, 0, ...].copy_(torch.from_numpy(organ_location), non_blocking=True)
+        if load_perslice_segmentation:
+            perslice_segmentation_batch[k, 0, ...].copy_(torch.from_numpy(organ_segmentation), non_blocking=True)
 
     with torch.no_grad():
         ## Apply elastic deformation to height width
@@ -150,6 +182,11 @@ def load_image(patient_ids: list,
                                                                                             .reshape(batch_size * organ_sampling_depth, 1, req_rot_h, req_rot_w),
                                                                                   displacement_field.view(batch_size * organ_sampling_depth, req_rot_h, req_rot_w, 2))
                                             .view(batch_size, 1, organ_sampling_depth, req_rot_h, req_rot_w) > 0.5, dim=2).float()
+            if load_perslice_segmentation:
+                perslice_segmentation_batch = image_sampler_augmentations.apply_displacement_field3D_simple(
+                    perslice_segmentation_batch.reshape(batch_size * organ_sampling_depth, 1, req_rot_h, req_rot_w),
+                    displacement_field.view(batch_size * organ_sampling_depth, req_rot_h, req_rot_w, 2)) \
+                    .view(batch_size, 1, organ_sampling_depth, req_rot_h, req_rot_w)
 
         ## Apply rotation augmentation to height width
         if translate_rotate_augmentation:
@@ -162,9 +199,15 @@ def load_image(patient_ids: list,
             organ_loc_batch = image_sampler_augmentations.rotate(organ_loc_batch.view(batch_size, 1, 1, req_rot_h, req_rot_w), list(rotation_angles))\
                                 .view(batch_size, req_rot_h, req_rot_w) > 0.5
 
+            if load_perslice_segmentation:
+                perslice_segmentation_batch = image_sampler_augmentations.rotate(perslice_segmentation_batch, list(rotation_angles))
+
         ## Crop the image to the desired size, and apply translation augmentation if necessary
         final_image_batch = torch.zeros((batch_size, 1, organ_sampling_depth, organ_height, organ_width), dtype=torch.float32,
                                                 device=config.device)
+        if load_perslice_segmentation:
+            final_perslice_segmentation_batch = torch.zeros((batch_size, 1, organ_sampling_depth, organ_height, organ_width), dtype=torch.float32,
+                                                device=config.device) if load_perslice_segmentation else None
         for k in range(batch_size):
             # compute organ bounds
             heights = torch.any(organ_loc_batch[k, ...], dim=-1)
@@ -205,8 +248,10 @@ def load_image(patient_ids: list,
 
             # crop the image
             final_image_batch[k, 0, ...].copy_(image_batch[k, 0, :, y_min:y_max, x_min:x_max], non_blocking=True)
+            if load_perslice_segmentation:
+                final_perslice_segmentation_batch[k, 0, ...].copy_(perslice_segmentation_batch[k, 0, :, y_min:y_max, x_min:x_max], non_blocking=True)
 
-    return final_image_batch
+    return final_image_batch, final_perslice_segmentation_batch
 
 
 if __name__ == "__main__":
