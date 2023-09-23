@@ -10,7 +10,7 @@ import manager_stage1_results
 import image_ROI_sampler
 
 series_meta = pd.read_csv("data/train_series_meta.csv", index_col=1)
-organs = ["liver", "spleen", "kidney"]
+organs = ["liver", "spleen", "kidney", "bowel"]
 
 SAMPLING_DEPTH = 34
 
