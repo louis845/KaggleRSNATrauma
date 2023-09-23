@@ -3,7 +3,6 @@ import os
 import numpy as np
 import pandas as pd
 
-os.environ.pop("QT_QPA_PLATFORM_PLUGIN_PATH")
 import h5py
 import pandas as pd
 
