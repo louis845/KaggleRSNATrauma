@@ -7,7 +7,7 @@ import h5py
 import pandas as pd
 
 from PySide2.QtWidgets import QApplication, QMainWindow, QFrame, QTreeView, QSlider, QLabel, QHBoxLayout, QVBoxLayout, \
-    QMessageBox, QComboBox, QWidget, QFileDialog
+    QMessageBox, QComboBox, QWidget, QFileDialog, QInputDialog
 from PySide2.QtCore import Qt
 from PySide2.QtGui import QStandardItemModel, QStandardItem, QPainter, QColor, QBrush, QLinearGradient, QGradient, QPen
 import matplotlib
@@ -245,7 +245,16 @@ if __name__ == "__main__":
         organ_segmentations = organ_segmentations_file["organ_segmentations"][...]
         organ_segmentations_file.close()
 
-        assert organ_segmentations.shape[0] == ct_3D_image.shape[0]
+        assert ct_3D_image.shape == organ_segmentations.shape
+        ct_3D_image = np.squeeze(ct_3D_image, axis=1)
+        organ_segmentations = np.squeeze(organ_segmentations, axis=1)
+
+        # Open dialog to ask the user to select a number from 0 to ct_3D_image.shape[0] - 1 inclusive
+        batch_number, ok = QInputDialog.getInt(None, "Select batch number", "Enter batch number", 0, 0, ct_3D_image.shape[0] - 1, 1)
+        if not ok:
+            exit(0)
+        ct_3D_image = ct_3D_image[batch_number, ...]
+        organ_segmentations = organ_segmentations[batch_number, ...]
 
         z_positions = np.arange(organ_segmentations.shape[0])
 
