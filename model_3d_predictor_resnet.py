@@ -254,6 +254,8 @@ class TotalAttnBlock(torch.nn.Module):
         self.batchnorm3 = torch.nn.InstanceNorm3d(num_features=out_channels, affine=True)
         self.nonlin3 = torch.nn.GELU()
 
+        self.in_channels = in_channels
+        self.out_channels = out_channels
         self.downsample = downsample
         self.depth = depth
         self.height = height
@@ -318,7 +320,7 @@ class TotalAttnBlock(torch.nn.Module):
         assert V2.shape == (N, self.bottleneck_channels, D, 1, H * W)
         attn = torch.softmax((Q2 * K2).sum(dim=1, keepdim=True) / math.sqrt(self.attention_dim * 2), dim=-1)
         x = (attn * V2).sum(dim=-1)
-        assert x.shape == (N, self.bottleneck_channels, D, H * W, 1)
+        assert x.shape == (N, self.bottleneck_channels, D, H * W)
         x = x.view(N, self.bottleneck_channels, D, H, W)
         x = self.nonlin2(x)
 
@@ -339,6 +341,7 @@ class TotalAttn(torch.nn.Module):
 
         self.height = height
         self.width = width
+        self.depth = depth
         if downsample:
             assert height % 2 == 0 and width % 2 == 0, "height and width must be divisible by 2 if downsample is True"
             self.downsampled_height = height // 2
@@ -351,12 +354,12 @@ class TotalAttn(torch.nn.Module):
         self.conv_res.append(TotalAttnBlock(in_channels, out_channels, self.downsampled_height, self.downsampled_width, downsample,
                                             bottleneck_factor=bottleneck_factor, attention_dim=32, depth=depth))
         for k in range(blocks):
-            self.conv_res.append(TotalAttnBlock(in_channels, out_channels, self.downsampled_height, self.downsampled_width, False,
+            self.conv_res.append(TotalAttnBlock(out_channels, out_channels, self.downsampled_height, self.downsampled_width, False,
                                             bottleneck_factor=bottleneck_factor, attention_dim=32, depth=depth))
         self.blocks = blocks
 
     def forward(self, x):
-        assert x.shape[-3:] == (self.height, self.width, self.depth)
+        assert x.shape[-3:] == (self.depth, self.height, self.width)
         for k in range(self.blocks):
             x = self.conv_res[k](x)
         return x

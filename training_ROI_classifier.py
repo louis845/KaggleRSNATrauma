@@ -88,7 +88,9 @@ def sample_cutmix_training(batch_entries, batch_entries2, series1, series2):
     with torch.no_grad():
         use_image1_region = ((organ_ROI + organ_ROI2) > 0.5).to(torch.float32) # image1 will be used for the pixels having organs in any of the images
         final_image_batch = image_batch * use_image1_region + image_batch2 * (1 - use_image1_region)
-        image1_organ_ROI = torch.nn.functional.avg_pool2d(organ_ROI, kernel_size=32, stride=32) # region of interest of organs in image1
+        N, _, D, H, W = organ_ROI.shape
+        image1_organ_ROI = torch.nn.functional.avg_pool2d(organ_ROI.view(N, D, H, W),
+                                                          kernel_size=32, stride=32).view(N, 1, D, H // 32, W // 32) # region of interest of organs in image1
     return final_image_batch, image1_organ_ROI
 
 def roi_preds_focal_loss(ROI_preds: torch.Tensor, gt_ROI: torch.Tensor):
@@ -402,7 +404,7 @@ if __name__ == "__main__":
     print("Validation dataset: {}".format(val_dset_name))
 
     if args.use_cutmix:
-        assert args.single_image, "Cutmix requires single image."
+        assert args.use_single_image, "Cutmix requires single image."
         assert args.channel_progression is not None, "Cutmix requires ResNet attention."
         SEGMENTATION_RESULTS_FOLDER_OVERRIDE = "EXTRACTED_STAGE1_RESULTS/stage1_organ_segmentator"
         DATA_INFO_FOLDER = "EXTRACTED_STAGE1_RESULTS/transformed_segmentations/{}_{}/data_hdf5_cropped".format(train_dset_name, organ)

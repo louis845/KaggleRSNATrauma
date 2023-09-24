@@ -150,6 +150,8 @@ class SliceLoaderWorker:
         self.process.join()
         self.image_shared_memory.close()
         self.image_shared_memory.unlink()
+        self.organ_segmentation_shared_memory.close()
+        self.organ_segmentation_shared_memory.unlink()
         self.organ_loc_shared_memory.close()
         self.organ_loc_shared_memory.unlink()
 
