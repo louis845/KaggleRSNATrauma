@@ -43,6 +43,8 @@ def get_labels(batch_entries):
     return np.stack(stack, axis=0).astype(np.float32)
 
 def sample_cutmix_training(batch_entries, batch_entries2, series1, series2):
+    mix_entries = np.random.rand() > 0.5
+
     if use_async_sampler:
         image_batch, organ_ROI = image_organ_sampler_async.load_image(batch_entries,
                                                               series1,
@@ -53,15 +55,16 @@ def sample_cutmix_training(batch_entries, batch_entries2, series1, series2):
                                                               elastic_augmentation=not disable_elastic_augmentation,
                                                               load_perslice_segmentation=True,
                                                               data_info_folder=DATA_INFO_FOLDER)
-        image_batch2, organ_ROI2 = image_organ_sampler_async.load_image(batch_entries2,
-                                                              series2,
-                                                              organ_id, organ_size[0], organ_size[1],
-                                                              train_stage1_results,
-                                                              sampling_depth,
-                                                              translate_rotate_augmentation=not disable_rotpos_augmentation,
-                                                              elastic_augmentation=not disable_elastic_augmentation,
-                                                              load_perslice_segmentation=True,
-                                                              data_info_folder=DATA_INFO_FOLDER)
+        if mix_entries:
+            image_batch2, organ_ROI2 = image_organ_sampler_async.load_image(batch_entries2,
+                                                                  series2,
+                                                                  organ_id, organ_size[0], organ_size[1],
+                                                                  train_stage1_results,
+                                                                  sampling_depth,
+                                                                  translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                                  elastic_augmentation=not disable_elastic_augmentation,
+                                                                  load_perslice_segmentation=True,
+                                                                  data_info_folder=DATA_INFO_FOLDER)
     else:
         image_batch, organ_ROI = image_organ_sampler.load_image(batch_entries,
                                                         series1,
@@ -72,22 +75,27 @@ def sample_cutmix_training(batch_entries, batch_entries2, series1, series2):
                                                         elastic_augmentation=not disable_elastic_augmentation,
                                                         load_perslice_segmentation=True,
                                                         data_info_folder=DATA_INFO_FOLDER)
-        image_batch2, organ_ROI2 = image_organ_sampler.load_image(batch_entries2,
-                                                        series2,
-                                                        organ_id, organ_size[0], organ_size[1],
-                                                        train_stage1_results,
-                                                        sampling_depth,
-                                                        translate_rotate_augmentation=not disable_rotpos_augmentation,
-                                                        elastic_augmentation=not disable_elastic_augmentation,
-                                                        load_perslice_segmentation=True,
-                                                        data_info_folder=DATA_INFO_FOLDER)
-    assert image_batch.shape == image_batch2.shape
-    assert organ_ROI.shape == organ_ROI2.shape
+        if mix_entries:
+            image_batch2, organ_ROI2 = image_organ_sampler.load_image(batch_entries2,
+                                                            series2,
+                                                            organ_id, organ_size[0], organ_size[1],
+                                                            train_stage1_results,
+                                                            sampling_depth,
+                                                            translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                            elastic_augmentation=not disable_elastic_augmentation,
+                                                            load_perslice_segmentation=True,
+                                                            data_info_folder=DATA_INFO_FOLDER)
+    if mix_entries:
+        assert image_batch.shape == image_batch2.shape
+        assert organ_ROI.shape == organ_ROI2.shape
     assert image_batch.shape == organ_ROI.shape
 
     with torch.no_grad():
-        use_image1_region = ((organ_ROI + organ_ROI2) > 0.5).to(torch.float32) # image1 will be used for the pixels having organs in any of the images
-        final_image_batch = image_batch * use_image1_region + image_batch2 * (1 - use_image1_region)
+        if mix_entries:
+            use_image1_region = ((organ_ROI + organ_ROI2) > 0.5).to(torch.float32) # image1 will be used for the pixels having organs in any of the images
+            final_image_batch = image_batch * use_image1_region + image_batch2 * (1 - use_image1_region)
+        else:
+            final_image_batch = image_batch
         N, _, D, H, W = organ_ROI.shape
         image1_organ_ROI = torch.nn.functional.avg_pool2d(organ_ROI.view(N, D, H, W),
                                                           kernel_size=32, stride=32).view(N, 1, D, H // 32, W // 32) # region of interest of organs in image1
@@ -254,7 +262,10 @@ def training_step(record: bool):
 def single_validation_step(model_: torch.nn.Module, image_batch: torch.Tensor, labels_batch: torch.Tensor):
     labels_batch_amax = torch.argmax(labels_batch, dim=-1)
     weights = torch.sum(labels_batch * weights_tensor, dim=-1)
-    pred_logits = model_(image_batch)
+    if use_cutmix:
+        pred_logits, _ = model_(image_batch)
+    else:
+        pred_logits = model_(image_batch)
     loss = torch.nn.functional.cross_entropy(pred_logits, labels_batch_amax, reduction="none")
     loss = torch.sum(loss * weights)
     preds = torch.argmax(pred_logits, dim=-1)
