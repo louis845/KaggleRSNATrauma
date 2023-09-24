@@ -205,9 +205,8 @@ def load_image(patient_ids: list,
         ## Crop the image to the desired size, and apply translation augmentation if necessary
         final_image_batch = torch.zeros((batch_size, 1, organ_sampling_depth, organ_height, organ_width), dtype=torch.float32,
                                                 device=config.device)
-        if load_perslice_segmentation:
-            final_perslice_segmentation_batch = torch.zeros((batch_size, 1, organ_sampling_depth, organ_height, organ_width), dtype=torch.float32,
-                                                device=config.device) if load_perslice_segmentation else None
+        final_perslice_segmentation_batch = torch.zeros((batch_size, 1, organ_sampling_depth, organ_height, organ_width), dtype=torch.float32,
+                                            device=config.device) if load_perslice_segmentation else None
         for k in range(batch_size):
             # compute organ bounds
             heights = torch.any(organ_loc_batch[k, ...], dim=-1)

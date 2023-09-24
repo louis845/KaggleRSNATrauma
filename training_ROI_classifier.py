@@ -42,6 +42,61 @@ def get_labels(batch_entries):
         stack.append(status)
     return np.stack(stack, axis=0).astype(np.float32)
 
+def sample_cutmix_training(batch_entries, batch_entries2, series1, series2):
+    if use_async_sampler:
+        image_batch, organ_ROI = image_organ_sampler_async.load_image(batch_entries,
+                                                              series1,
+                                                              organ_id, organ_size[0], organ_size[1],
+                                                              train_stage1_results,
+                                                              sampling_depth,
+                                                              translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                              elastic_augmentation=not disable_elastic_augmentation,
+                                                              load_perslice_segmentation=True,
+                                                              data_info_folder=DATA_INFO_FOLDER)
+        image_batch2, organ_ROI2 = image_organ_sampler_async.load_image(batch_entries2,
+                                                              series2,
+                                                              organ_id, organ_size[0], organ_size[1],
+                                                              train_stage1_results,
+                                                              sampling_depth,
+                                                              translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                              elastic_augmentation=not disable_elastic_augmentation,
+                                                              load_perslice_segmentation=True,
+                                                              data_info_folder=DATA_INFO_FOLDER)
+    else:
+        image_batch, organ_ROI = image_organ_sampler.load_image(batch_entries,
+                                                        series1,
+                                                        organ_id, organ_size[0], organ_size[1],
+                                                        train_stage1_results,
+                                                        sampling_depth,
+                                                        translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                        elastic_augmentation=not disable_elastic_augmentation,
+                                                        load_perslice_segmentation=True,
+                                                        data_info_folder=DATA_INFO_FOLDER)
+        image_batch2, organ_ROI2 = image_organ_sampler.load_image(batch_entries2,
+                                                        series2,
+                                                        organ_id, organ_size[0], organ_size[1],
+                                                        train_stage1_results,
+                                                        sampling_depth,
+                                                        translate_rotate_augmentation=not disable_rotpos_augmentation,
+                                                        elastic_augmentation=not disable_elastic_augmentation,
+                                                        load_perslice_segmentation=True,
+                                                        data_info_folder=DATA_INFO_FOLDER)
+    assert image_batch.shape == image_batch2.shape
+    assert organ_ROI.shape == organ_ROI2.shape
+    assert image_batch.shape == organ_ROI.shape
+
+    with torch.no_grad():
+        use_image1_region = ((organ_ROI + organ_ROI2) > 0.5).to(torch.float32) # image1 will be used for the pixels having organs in any of the images
+        final_image_batch = image_batch * use_image1_region + image_batch2 * (1 - use_image1_region)
+        image1_organ_ROI = torch.nn.functional.avg_pool2d(organ_ROI, kernel_size=32, stride=32) # region of interest of organs in image1
+    return final_image_batch, image1_organ_ROI
+
+def roi_preds_focal_loss(ROI_preds: torch.Tensor, gt_ROI: torch.Tensor):
+    ce = torch.nn.functional.binary_cross_entropy_with_logits(ROI_preds, gt_ROI, reduction="none")
+    per_batch_loss = torch.mean(((ROI_preds - gt_ROI) ** 2) * ce, dim=[-1, -2, -3]) # mean over D, H, W
+    return torch.sum(per_batch_loss) * 0.1
+
+
 weights_tensor = None # to be initialized
 def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
                             image_batch: torch.Tensor, labels_batch: torch.Tensor):
@@ -60,6 +115,34 @@ def single_training_step(model_: torch.nn.Module, optimizer_: torch.optim.Optimi
 
     return loss.item(), preds, weights
 
+def single_training_step_cutmix(model_: torch.nn.Module, optimizer_: torch.optim.Optimizer,
+                            image_batch: torch.Tensor, labels_batch: torch.Tensor, organ_ROI: torch.Tensor):
+    with torch.no_grad():
+        labels_batch_amax = torch.argmax(labels_batch, dim=-1)
+        weights = torch.sum(labels_batch * weights_tensor, dim=-1)
+    optimizer_.zero_grad()
+    pred_logits, deep_ROI_outs = model_(image_batch)
+    loss = torch.nn.functional.cross_entropy(pred_logits, labels_batch_amax, reduction="none")
+    loss = torch.sum(loss * weights)
+
+    assert organ_ROI.shape == deep_ROI_outs.shape
+    if use_deep_supervision:
+        deep_supervision_loss = roi_preds_focal_loss(deep_ROI_outs, organ_ROI)
+        combined_loss = loss + deep_supervision_loss
+    else:
+        combined_loss = loss
+
+    combined_loss.backward()
+    optimizer_.step()
+
+    with torch.no_grad():
+        preds = torch.argmax(pred_logits, dim=-1)
+
+        if use_deep_supervision:
+            return loss.item(), preds, weights, deep_supervision_loss.item(), (deep_ROI_outs > 0).to(torch.long)
+        else:
+            return loss.item(), preds, weights, None, None
+
 def training_step(record: bool):
     if record:
         for key in train_metrics:
@@ -67,6 +150,8 @@ def training_step(record: bool):
 
     # shuffle
     shuffle_indices = np.random.permutation(len(training_entries))
+    if use_cutmix:
+        shuffle_indices2 = np.random.permutation(len(training_entries))
 
     # training
     trained = 0
@@ -80,8 +165,10 @@ def training_step(record: bool):
             # sample now
             if use_single_image:
                 if use_cutmix:
-                    pass
-                    # TODO: implement cutmix
+                    batch_entries2 = training_entries[shuffle_indices2[trained:trained + length]]  # patient ids 2
+                    series1_2, series2_2 = train_stage1_results.get_dual_series(batch_entries2, organ_id=organ_id)
+                    image_batch, organ_ROI = sample_cutmix_training(batch_entries, batch_entries2,
+                                                                    series1, series1_2)
                 else:
                     if use_async_sampler:
                         image_batch, _ = image_organ_sampler_async.load_image(batch_entries,
@@ -136,7 +223,10 @@ def training_step(record: bool):
             labels_batch = torch.tensor(get_labels(batch_entries), device=config.device, dtype=torch.float32)
 
             # do training now
-            loss, preds, weights = single_training_step(model, optimizer, image_batch, labels_batch)
+            if use_cutmix:
+                loss, preds, weights, deep_supervision_loss, ROI_preds = single_training_step_cutmix(model, optimizer, image_batch, labels_batch, organ_ROI)
+            else:
+                loss, preds, weights = single_training_step(model, optimizer, image_batch, labels_batch)
             weights = weights.cpu().numpy()
 
             # record
@@ -144,6 +234,9 @@ def training_step(record: bool):
                 with torch.no_grad():
                     train_metrics["loss"].add(loss, sum(list(weights)))
                     train_metrics["metric"].add(preds, torch.argmax(labels_batch, dim=-1))
+                    if use_deep_supervision: # note that when deep supervision is used, cutmix is always used
+                        train_metrics["ROI_loss"].add(deep_supervision_loss, length)
+                        train_metrics["ROI_metric"].add(ROI_preds, (organ_ROI > 0.5).to(torch.long))
 
             trained += length
             pbar.update(length)
@@ -272,6 +365,7 @@ if __name__ == "__main__":
     parser.add_argument("--disable_elastic_augmentation", action="store_true", help="Whether to disable elastic augmentation. Default False.")
     parser.add_argument("--use_single_image", action="store_true", help="Whether to use single image instead of dual image. Default False.")
     parser.add_argument("--use_cutmix", action="store_true", help="Whether to use cutmix. Default False.")
+    parser.add_argument("--use_deep_supervision", action="store_true", help="Whether to use deep supervision. Default False.")
     parser.add_argument("--use_initial_downsample", action="store_true", help="Whether to use initial downsample. Default False.")
     parser.add_argument("--batch_size", type=int, default=9, help="Batch size. Default 9")
     parser.add_argument("--volume_depth", type=int, default=9, help="Number of slices to use per volume. Default 9.")
@@ -309,7 +403,10 @@ if __name__ == "__main__":
 
     if args.use_cutmix:
         assert args.single_image, "Cutmix requires single image."
+        assert args.channel_progression is not None, "Cutmix requires ResNet attention."
         SEGMENTATION_RESULTS_FOLDER_OVERRIDE = "EXTRACTED_STAGE1_RESULTS/stage1_organ_segmentator"
+        DATA_INFO_FOLDER = "EXTRACTED_STAGE1_RESULTS/transformed_segmentations/{}_{}/data_hdf5_cropped".format(train_dset_name, organ)
+        assert os.path.exists(DATA_INFO_FOLDER), "Data info folder\n{}\ndoes not exist.".format(DATA_INFO_FOLDER)
     else:
         SEGMENTATION_RESULTS_FOLDER_OVERRIDE = None
     train_stage1_results = manager_stage1_results.Stage1ResultsManager(train_dset_name, SEGMENTATION_RESULTS_FOLDER_OVERRIDE=SEGMENTATION_RESULTS_FOLDER_OVERRIDE)
@@ -346,6 +443,7 @@ if __name__ == "__main__":
     disable_elastic_augmentation = args.disable_elastic_augmentation
     use_single_image = args.use_single_image
     use_cutmix = args.use_cutmix
+    use_deep_supervision = args.use_deep_supervision
     use_initial_downsample = args.use_initial_downsample
     batch_size = args.batch_size
     volume_depth = args.volume_depth
@@ -360,6 +458,10 @@ if __name__ == "__main__":
     use_async_sampler = args.use_async_sampler
     num_extra_steps = args.num_extra_steps
 
+    if use_deep_supervision:
+        assert use_cutmix, "Deep supervision requires cutmix."
+        assert channel_progression is not None, "Deep supervision requires ResNet attention"
+
     print("Epochs: " + str(epochs))
     print("Learning rate: " + str(learning_rate))
     print("Momentum: " + str(momentum))
@@ -367,6 +469,7 @@ if __name__ == "__main__":
     print("Disable rotation and translation augmentation: " + str(disable_rotpos_augmentation))
     print("Disable elastic augmentation: " + str(disable_elastic_augmentation))
     print("Cutmix augmentation: " + str(use_cutmix))
+    print("Cutmix deep supervision: " + str(use_deep_supervision))
     print("Batch size: " + str(batch_size))
     model_resnet_old.BATCH_NORM_MOMENTUM = 1 - momentum
 
@@ -394,16 +497,27 @@ if __name__ == "__main__":
         assert conv3d_blocks is not None, "Conv3D blocks must be specified for ResNet attention."
         assert isinstance(conv3d_blocks, list), "Conv3D blocks must be a list."
         assert len(conv3d_blocks) == len(hidden_blocks), "Conv3D blocks must have same length as hidden blocks."
-        model = model_3d_predictor_resnet.ResNet3DClassifier(
-            in_channels=1, out_classes=3,
-            channel_progression=channel_progression,
-            conv3d_blocks=conv3d_blocks,
-            res_conv_blocks=hidden_blocks,
-            bottleneck_factor=bottleneck_factor,
-            input_depth=net_depth,
-            input_single_image=use_single_image,
-            initial_downsampling=use_initial_downsample,
-        )
+        if use_cutmix:
+            model = model_3d_predictor_resnet.ResNetTotalAttn3DClassifier(
+                in_channels=1, out_classes=3,
+                channel_progression=channel_progression,
+                conv3d_blocks=conv3d_blocks,
+                res_conv_blocks=hidden_blocks,
+                bottleneck_factor=bottleneck_factor,
+                input_depth=net_depth,
+                input_height=organ_size[0], input_width=organ_size[1],
+            )
+        else:
+            model = model_3d_predictor_resnet.ResNet3DClassifier(
+                in_channels=1, out_classes=3,
+                channel_progression=channel_progression,
+                conv3d_blocks=conv3d_blocks,
+                res_conv_blocks=hidden_blocks,
+                bottleneck_factor=bottleneck_factor,
+                input_depth=net_depth,
+                input_single_image=use_single_image,
+                initial_downsampling=use_initial_downsample,
+            )
         using_resnet = False
     model = model.to(config.device)
 
@@ -450,6 +564,7 @@ if __name__ == "__main__":
         "disable_elastic_augmentation": disable_elastic_augmentation,
         "use_single_image": use_single_image,
         "use_cutmix": use_cutmix,
+        "use_deep_supervision": use_deep_supervision,
         "use_initial_downsample": use_initial_downsample,
         "batch_size": batch_size,
         "volume_depth": volume_depth,
@@ -477,6 +592,9 @@ if __name__ == "__main__":
     train_metrics["metric"] = metrics.TernaryMetrics("train_metric")
     val_metrics["loss"] = metrics.NumericalMetric("val_loss")
     val_metrics["metric"] = metrics.TernaryMetrics("val_metric")
+    if use_deep_supervision:
+        train_metrics["ROI_loss"] = metrics.NumericalMetric("train_ROI_loss")
+        train_metrics["ROI_metric"] = metrics.BinaryMetrics("train_ROI_metric")
 
     # Compile
     single_training_step_compile = torch.compile(single_training_step)
