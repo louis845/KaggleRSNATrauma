@@ -255,6 +255,7 @@ if __name__ == "__main__":
             exit(0)
         ct_3D_image = ct_3D_image[batch_number, ...]
         organ_segmentations = organ_segmentations[batch_number, ...]
+        organ_segmentations = np.expand_dims(organ_segmentations, axis=1)
 
         z_positions = np.arange(organ_segmentations.shape[0])
 
