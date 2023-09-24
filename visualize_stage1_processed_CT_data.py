@@ -190,42 +190,68 @@ class ProcessedStage1CTViewer(QMainWindow):
 if __name__ == "__main__":
     app = QApplication([])
 
-    # show a file chooser to prompt the user to select an existing .npy file
-    file_path, _ = QFileDialog.getOpenFileName(None, "Select the z-positions of processed stage1 CT file", "", "Numpy files (*.npy)")
-    if file_path == "":
-        exit(0)
-    parent_folder = os.path.dirname(file_path)
-    subfiles = os.listdir(parent_folder)
-    if not "ct_3D_image.hdf5" in subfiles:
-        QMessageBox.critical(None, "Error", "Cannot find ct_3D_image.hdf5 in the same folder as the z-positions file")
-        exit(0)
-    if not "organ_segmentations.hdf5" in subfiles:
-        QMessageBox.critical(None, "Error", "Cannot find organ_segmentations.hdf5 in the same folder as the z-positions file")
-        exit(0)
+    # show a prompt box with two options "Load external" or "Load internal"
+    response = QMessageBox.question(None, "Load CT", "Load external or internal CT?", QMessageBox.Yes | QMessageBox.No)
 
-    ct_3D_image_file = h5py.File(os.path.join(parent_folder, "ct_3D_image.hdf5"), "r")
-    ct_3D_image = ct_3D_image_file["ct_3D_image"][...]
-    ct_3D_image_file.close()
+    if response == QMessageBox.Yes:
+        # show a file chooser to prompt the user to select an existing .npy file
+        file_path, _ = QFileDialog.getOpenFileName(None, "Select the z-positions of processed stage1 CT file", "", "Numpy files (*.npy)")
+        if file_path == "":
+            exit(0)
+        parent_folder = os.path.dirname(file_path)
+        subfiles = os.listdir(parent_folder)
+        if not "ct_3D_image.hdf5" in subfiles:
+            QMessageBox.critical(None, "Error", "Cannot find ct_3D_image.hdf5 in the same folder as the z-positions file")
+            exit(0)
+        if not "organ_segmentations.hdf5" in subfiles:
+            QMessageBox.critical(None, "Error", "Cannot find organ_segmentations.hdf5 in the same folder as the z-positions file")
+            exit(0)
 
-    organ_segmentations_file = h5py.File(os.path.join(parent_folder, "organ_segmentations.hdf5"), "r")
-    organ_segmentations = organ_segmentations_file["organ_segmentations"][...]
-    organ_segmentations_file.close()
+        ct_3D_image_file = h5py.File(os.path.join(parent_folder, "ct_3D_image.hdf5"), "r")
+        ct_3D_image = ct_3D_image_file["ct_3D_image"][...]
+        ct_3D_image_file.close()
 
-    z_positions = np.load(file_path)
+        organ_segmentations_file = h5py.File(os.path.join(parent_folder, "organ_segmentations.hdf5"), "r")
+        organ_segmentations = organ_segmentations_file["organ_segmentations"][...]
+        organ_segmentations_file.close()
 
-    series_id = int(os.path.basename(parent_folder))
-    dataset_path = os.path.dirname(os.path.dirname(os.path.dirname(parent_folder)))
-    dataset_name = os.path.basename(dataset_path)
-    dataset_name = dataset_name.split("_")
-    organ_name = dataset_name[-1]
-    dataset_name = "_".join(dataset_name[:-1])
-    print("dataset_name: ", dataset_name)
-    print("organ_name: ", organ_name)
+        z_positions = np.load(file_path)
 
-    organ_file = os.path.join("EXTRACTED_STAGE1_RESULTS", "stage1_organ_segmentator", dataset_name, str(series_id) + ".csv")
-    organ_info = pd.read_csv(organ_file, index_col=0)
+        series_id = int(os.path.basename(parent_folder))
+        dataset_path = os.path.dirname(os.path.dirname(os.path.dirname(parent_folder)))
+        dataset_name = os.path.basename(dataset_path)
+        dataset_name = dataset_name.split("_")
+        organ_name = dataset_name[-1]
+        dataset_name = "_".join(dataset_name[:-1])
+        print("dataset_name: ", dataset_name)
+        print("organ_name: ", organ_name)
 
-    window = ProcessedStage1CTViewer(ct_3D_image, z_positions, organ_segmentations, organ_info.loc[organ_name, "left"], organ_info.loc[organ_name, "right"])
+        organ_file = os.path.join("EXTRACTED_STAGE1_RESULTS", "stage1_organ_segmentator", dataset_name, str(series_id) + ".csv")
+        organ_info = pd.read_csv(organ_file, index_col=0)
+
+        left, right = organ_info.loc[organ_name, "left"], organ_info.loc[organ_name, "right"]
+    else:
+        file_path, _ = QFileDialog.getOpenFileName(None, "Select the processed stage1 CT file", "", "HDFF files (*.hdf5)")
+        if file_path == "":
+            exit(0)
+        ct_3D_image_file = h5py.File(file_path, "r")
+        ct_3D_image = ct_3D_image_file["ct_3D_image"][...]
+        ct_3D_image_file.close()
+
+        file_path, _ = QFileDialog.getOpenFileName(None, "Select the processed segmentation file", "", "HDFF files (*.hdf5)")
+        if file_path == "":
+            exit(0)
+        organ_segmentations_file = h5py.File(file_path, "r")
+        organ_segmentations = organ_segmentations_file["organ_segmentations"][...]
+        organ_segmentations_file.close()
+
+        assert organ_segmentations.shape[0] == ct_3D_image.shape[0]
+
+        z_positions = np.arange(organ_segmentations.shape[0])
+
+        left, right = 0, organ_segmentations.shape[0] - 1
+
+    window = ProcessedStage1CTViewer(ct_3D_image, z_positions, organ_segmentations, left, right)
     window.show()
     app.exec_()
 
