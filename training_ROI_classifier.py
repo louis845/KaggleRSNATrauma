@@ -91,6 +91,7 @@ def sample_cutmix_training(batch_entries, batch_entries2, series1, series2):
     assert image_batch.shape == organ_ROI.shape
 
     with torch.no_grad():
+        #mix_entries = False
         if mix_entries:
             use_image1_region = ((organ_ROI + organ_ROI2) > 0.5).to(torch.float32) # image1 will be used for the pixels having organs in any of the images
             final_image_batch = image_batch * use_image1_region + image_batch2 * (1 - use_image1_region)
@@ -283,7 +284,7 @@ def single_validation_step_cutmix(model_: torch.nn.Module, image_batch: torch.Te
 
     if use_deep_supervision:
         deep_supervision_loss = roi_preds_focal_loss(deep_ROI_outs, organ_ROI)
-    return loss.item(), preds, weights, deep_supervision_loss.item(), (deep_ROI_outs > 0).to(torch.long)
+    return loss.item(), preds, weights.cpu().numpy(), deep_supervision_loss.item(), (deep_ROI_outs > 0).to(torch.long)
 
 def validation_step():
     for key in val_metrics:
@@ -321,6 +322,9 @@ def validation_step():
                                                        elastic_augmentation=False,
                                                        data_info_folder=VAL_DATA_INFO_FOLDER,
                                                        load_perslice_segmentation=use_deep_supervision)
+                    N, _, D, H, W = organ_ROI.shape
+                    organ_ROI = torch.nn.functional.avg_pool2d(organ_ROI.view(N, D, H, W),
+                                                                      kernel_size=32, stride=32).view(N, 1, D, H // 32, W // 32)
                 else:
                     if use_async_sampler:
                         image_batch, _ = image_organ_sampler_async.load_image(batch_entries,
