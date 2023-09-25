@@ -179,10 +179,12 @@ class ResConv3DAttn(torch.nn.Module):
                                                                       squeeze_excitation_bottleneck_factor=2))
             num_2d_blocks -= 1
         else:
-            self.conv_res.append(ResConv3DAttnBlock(in_channels, out_channels, downsample=downsample,
+            self.conv_res.append(ResConv3DBlock(in_channels, out_channels, downsample=downsample,
+                                                    bottleneck_factor=bottleneck_factor, squeeze_excitation=True))
+            """self.conv_res.append(ResConv3DAttnBlock(in_channels, out_channels, downsample=downsample,
                                                     bottleneck_factor=bottleneck_factor, attention_dim=attention_dim,
                                                     depth=depth, pos_embeddings_input=pos_embeddings_input,
-                                                    single_image=single_image, mix_images=mix_images))
+                                                    single_image=single_image, mix_images=mix_images))"""
         for k in range(blocks - 1):
             if num_2d_blocks > 0:
                 self.conv_res.append(model_3d_patch_resnet.ResConv2DBlock(out_channels, out_channels,
@@ -191,10 +193,12 @@ class ResConv3DAttn(torch.nn.Module):
                                                                           squeeze_excitation_bottleneck_factor=2))
                 num_2d_blocks -= 1
             else:
-                self.conv_res.append(ResConv3DAttnBlock(out_channels, out_channels, downsample=False,
+                self.conv_res.append(ResConv3DBlock(out_channels, out_channels, downsample=False,
+                                                        bottleneck_factor=bottleneck_factor, squeeze_excitation=True))
+                """self.conv_res.append(ResConv3DAttnBlock(out_channels, out_channels, downsample=False,
                                                         bottleneck_factor=bottleneck_factor, attention_dim=attention_dim,
                                                         depth=depth, pos_embeddings_input=pos_embeddings_input,
-                                                        single_image=single_image, mix_images=mix_images))
+                                                        single_image=single_image, mix_images=mix_images))"""
         self.blocks = blocks
         self.pos_embeddings_input = pos_embeddings_input
 
@@ -212,6 +216,123 @@ class ResConv3DAttn(torch.nn.Module):
             for k in range(self.blocks):
                 x = self.conv_res[k](x)
         return x
+
+class ResConv3DBlock(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, downsample=False,
+                 bottleneck_factor=1, squeeze_excitation=False, squeeze_excitation_bottleneck_factor=4):
+        """
+        Only applies 2D convolutions to a 3D block
+        :param in_channels: number of input channels
+        :param out_channels: number of output channels
+        :param normalization_type: "batchnorm" or "instancenorm"
+        :param downsample: whether to downsample the input 2x2
+        :param bottleneck_factor: how much to expand the number of channels in the bottleneck
+        :param squeeze_excitation: whether to use squeeze and excitation
+        :param squeeze_excitation_bottleneck_factor: how much to reduce the number of channels in the squeeze and excitation
+        """
+        super(ResConv3DBlock, self).__init__()
+        assert in_channels <= out_channels
+        if bottleneck_factor > 1:
+            assert out_channels % bottleneck_factor == 0, "out_channels must be divisible by bottleneck_factor"
+            assert out_channels % (bottleneck_factor * 4) == 0, "out_channels must be divisible by bottleneck_factor * 4"
+
+        bottleneck_channels = out_channels // bottleneck_factor
+        if downsample:
+            self.avgpool = torch.nn.AvgPool3d(kernel_size=(1, 2, 2), stride=(1, 2, 2), padding=0)
+
+        if bottleneck_factor > 1:
+            # 1 -> 3 -> 1 kernel, with bottleneck and capacity
+            self.conv1 = torch.nn.Conv3d(in_channels, bottleneck_channels, 1, bias=False, padding="same", padding_mode="replicate")
+            self.batchnorm1 = torch.nn.InstanceNorm3d(bottleneck_channels, affine=True)
+            self.nonlin1 = torch.nn.GELU()
+
+            num_groups = bottleneck_channels // 4
+            if downsample:
+                self.conv2 = torch.nn.Conv3d(bottleneck_channels, bottleneck_channels, kernel_size=(3, 3, 3), stride=(1, 2, 2),
+                                             bias=False, padding=(1, 0, 0), groups=num_groups)  # x4d, meaning 4 channels in each "capacity" connection
+            else:
+                self.conv2 = torch.nn.Conv3d(bottleneck_channels, bottleneck_channels, kernel_size=(3, 3, 3), bias=False,
+                                             padding="same", padding_mode="replicate", groups=num_groups)
+            self.batchnorm2 = torch.nn.InstanceNorm3d(bottleneck_channels, affine=True)
+            self.nonlin2 = torch.nn.GELU()
+
+            self.conv3 = torch.nn.Conv3d(bottleneck_channels, out_channels, 1, bias=False, padding="same",
+                                         padding_mode="replicate")
+            self.batchnorm3 = torch.nn.InstanceNorm3d(out_channels, affine=True)
+            self.nonlin3 = torch.nn.GELU()
+        else:
+            # 3 -> 3 kernel, without bottleneck or capacity
+            self.conv1 = torch.nn.Conv3d(in_channels, out_channels, kernel_size=(1, 3, 3), bias=False, padding="same",
+                                         padding_mode="replicate")
+            self.batchnorm1 = torch.nn.InstanceNorm3d(out_channels, affine=True)
+            self.nonlin1 = torch.nn.GELU()
+
+            if downsample:
+                self.conv2 = torch.nn.Conv3d(out_channels, out_channels, kernel_size=(3, 3, 3), stride=(1, 2, 2),
+                                             bias=False, padding=(1, 0, 0))
+            else:
+                self.conv2 = torch.nn.Conv3d(out_channels, out_channels, kernel_size=(3, 3, 3), bias=False,
+                                             padding="same", padding_mode="replicate")
+            self.batchnorm2 = torch.nn.InstanceNorm3d(out_channels, affine=True)
+            self.nonlin2 = torch.nn.GELU()
+
+        if squeeze_excitation:
+            assert out_channels % squeeze_excitation_bottleneck_factor == 0, "out_channels must be divisible by squeeze_excitation_bottleneck_factor"
+            self.se_pool = torch.nn.AdaptiveAvgPool3d(1)
+            self.se_conv1 = torch.nn.Conv3d(out_channels, out_channels // squeeze_excitation_bottleneck_factor, kernel_size=1, bias=True,
+                                            padding="same", padding_mode="replicate")
+            self.se_relu = torch.nn.ReLU()
+            self.se_conv2 = torch.nn.Conv3d(out_channels // squeeze_excitation_bottleneck_factor, out_channels, kernel_size=1, bias=True,
+                                            padding="same", padding_mode="replicate")
+            self.se_sigmoid = torch.nn.Sigmoid()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.downsample = downsample
+        self.bottleneck_factor = bottleneck_factor
+        self.squeeze_excitation = squeeze_excitation
+
+    def forward(self, x):
+        N, C, D, H, W = x.shape
+
+        if self.in_channels < self.out_channels:
+            x_init = torch.nn.functional.pad(x, (
+            0, 0, 0, 0, 0, 0, 0, self.out_channels - self.in_channels), "constant", 0.0)
+        else:
+            x_init = x
+
+        x = self.conv1(x)
+        x = self.batchnorm1(x)
+        x = self.nonlin1(x)
+        assert x.shape == (N, self.out_channels // self.bottleneck_factor, D, H, W)
+
+        if self.downsample:
+            x = self.conv2(torch.nn.functional.pad(x, (1, 0, 1, 0, 0, 0), "reflect"))
+        else:
+            x = self.conv2(x)
+        x = self.batchnorm2(x)
+
+        if self.bottleneck_factor > 1:
+            x = self.nonlin2(x)
+
+            x = self.conv3(x)
+            x = self.batchnorm3(x)
+
+        if self.squeeze_excitation:
+            x_se = self.se_pool(x)
+            x_se = self.se_conv1(x_se)
+            x_se = self.se_relu(x_se)
+            x_se = self.se_conv2(x_se)
+            x_se = self.se_sigmoid(x_se)
+            x = x * x_se
+
+        if self.downsample:
+            x_init = self.avgpool(x_init)
+        if self.bottleneck_factor > 1:
+            result = self.nonlin3(x_init + x)
+        else:
+            result = self.nonlin2(x_init + x)
+        return result
 
 class TotalAttnBlock(torch.nn.Module):
     def __init__(self, in_channels, out_channels, height, width, downsample=False,
