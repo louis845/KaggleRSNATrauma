@@ -54,7 +54,7 @@ def sample_cutmix_training(batch_entries, batch_entries2, series1, series2):
                                                               translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                               elastic_augmentation=not disable_elastic_augmentation,
                                                               load_perslice_segmentation=True,
-                                                              data_info_folder=DATA_INFO_FOLDER)
+                                                              data_info_folder=TRAIN_DATA_INFO_FOLDER)
         if mix_entries:
             image_batch2, organ_ROI2 = image_organ_sampler_async.load_image(batch_entries2,
                                                                   series2,
@@ -64,7 +64,7 @@ def sample_cutmix_training(batch_entries, batch_entries2, series1, series2):
                                                                   translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                                   elastic_augmentation=not disable_elastic_augmentation,
                                                                   load_perslice_segmentation=True,
-                                                                  data_info_folder=DATA_INFO_FOLDER)
+                                                                  data_info_folder=TRAIN_DATA_INFO_FOLDER)
     else:
         image_batch, organ_ROI = image_organ_sampler.load_image(batch_entries,
                                                         series1,
@@ -74,7 +74,7 @@ def sample_cutmix_training(batch_entries, batch_entries2, series1, series2):
                                                         translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                         elastic_augmentation=not disable_elastic_augmentation,
                                                         load_perslice_segmentation=True,
-                                                        data_info_folder=DATA_INFO_FOLDER)
+                                                        data_info_folder=TRAIN_DATA_INFO_FOLDER)
         if mix_entries:
             image_batch2, organ_ROI2 = image_organ_sampler.load_image(batch_entries2,
                                                             series2,
@@ -84,7 +84,7 @@ def sample_cutmix_training(batch_entries, batch_entries2, series1, series2):
                                                             translate_rotate_augmentation=not disable_rotpos_augmentation,
                                                             elastic_augmentation=not disable_elastic_augmentation,
                                                             load_perslice_segmentation=True,
-                                                            data_info_folder=DATA_INFO_FOLDER)
+                                                            data_info_folder=TRAIN_DATA_INFO_FOLDER)
     if mix_entries:
         assert image_batch.shape == image_batch2.shape
         assert organ_ROI.shape == organ_ROI2.shape
@@ -272,6 +272,19 @@ def single_validation_step(model_: torch.nn.Module, image_batch: torch.Tensor, l
 
     return loss.item(), preds, weights.cpu().numpy()
 
+def single_validation_step_cutmix(model_: torch.nn.Module, image_batch: torch.Tensor,
+                                  labels_batch: torch.Tensor, organ_ROI: torch.Tensor):
+    labels_batch_amax = torch.argmax(labels_batch, dim=-1)
+    weights = torch.sum(labels_batch * weights_tensor, dim=-1)
+    pred_logits, deep_ROI_outs = model_(image_batch)
+    loss = torch.nn.functional.cross_entropy(pred_logits, labels_batch_amax, reduction="none")
+    loss = torch.sum(loss * weights)
+    preds = torch.argmax(pred_logits, dim=-1)
+
+    if use_deep_supervision:
+        deep_supervision_loss = roi_preds_focal_loss(deep_ROI_outs, organ_ROI)
+    return loss.item(), preds, weights, deep_supervision_loss.item(), (deep_ROI_outs > 0).to(torch.long)
+
 def validation_step():
     for key in val_metrics:
         val_metrics[key].reset()
@@ -287,26 +300,44 @@ def validation_step():
 
             # sample now
             if use_single_image:
-                if use_async_sampler:
-                    image_batch, organ_ROI = image_organ_sampler_async.load_image(batch_entries,
-                                                                  series1,
-                                                                  organ_id, organ_size[0], organ_size[1],
-                                                                  val_stage1_results,
-                                                                  sampling_depth,
-                                                                  translate_rotate_augmentation=False,
-                                                                  elastic_augmentation=False,
-                                                                  data_info_folder=DATA_INFO_FOLDER,
-                                                                  load_perslice_segmentation=use_deep_supervision)
+                if use_cutmix:
+                    if use_async_sampler:
+                        image_batch, organ_ROI = image_organ_sampler_async.load_image(batch_entries,
+                                                                      series1,
+                                                                      organ_id, organ_size[0], organ_size[1],
+                                                                      val_stage1_results,
+                                                                      sampling_depth,
+                                                                      translate_rotate_augmentation=False,
+                                                                      elastic_augmentation=False,
+                                                                      data_info_folder=VAL_DATA_INFO_FOLDER,
+                                                                      load_perslice_segmentation=use_deep_supervision)
+                    else:
+                        image_batch, organ_ROI = image_organ_sampler.load_image(batch_entries,
+                                                       series1,
+                                                       organ_id, organ_size[0], organ_size[1],
+                                                       val_stage1_results,
+                                                       sampling_depth,
+                                                       translate_rotate_augmentation=False,
+                                                       elastic_augmentation=False,
+                                                       data_info_folder=VAL_DATA_INFO_FOLDER,
+                                                       load_perslice_segmentation=use_deep_supervision)
                 else:
-                    image_batch, organ_ROI = image_organ_sampler.load_image(batch_entries,
-                                                   series1,
-                                                   organ_id, organ_size[0], organ_size[1],
-                                                   val_stage1_results,
-                                                   sampling_depth,
-                                                   translate_rotate_augmentation=False,
-                                                   elastic_augmentation=False,
-                                                   data_info_folder=DATA_INFO_FOLDER,
-                                                   load_perslice_segmentation=use_deep_supervision)
+                    if use_async_sampler:
+                        image_batch, _ = image_organ_sampler_async.load_image(batch_entries,
+                                                                      series1,
+                                                                      organ_id, organ_size[0], organ_size[1],
+                                                                      val_stage1_results,
+                                                                      sampling_depth,
+                                                                      translate_rotate_augmentation=False,
+                                                                      elastic_augmentation=False)
+                    else:
+                        image_batch, _ = image_organ_sampler.load_image(batch_entries,
+                                                       series1,
+                                                       organ_id, organ_size[0], organ_size[1],
+                                                       val_stage1_results,
+                                                       sampling_depth,
+                                                       translate_rotate_augmentation=False,
+                                                       elastic_augmentation=False)
             else:
                 if use_async_sampler:
                     image_batch1, _ = image_organ_sampler_async.load_image(batch_entries,
@@ -315,16 +346,14 @@ def validation_step():
                                                                   val_stage1_results,
                                                                   volume_depth,
                                                                   translate_rotate_augmentation=False,
-                                                                  elastic_augmentation=False,
-                                                                  data_info_folder=DATA_INFO_FOLDER)
+                                                                  elastic_augmentation=False)
                     image_batch2, _ = image_organ_sampler_async.load_image(batch_entries,
                                                                   series2,
                                                                   organ_id, organ_size[0], organ_size[1],
                                                                   val_stage1_results,
                                                                   volume_depth,
                                                                   translate_rotate_augmentation=False,
-                                                                  elastic_augmentation=False,
-                                                                  data_info_folder=DATA_INFO_FOLDER)
+                                                                  elastic_augmentation=False)
                 else:
                     image_batch1, _ = image_organ_sampler.load_image(batch_entries,
                                                    series1,
@@ -332,16 +361,14 @@ def validation_step():
                                                    val_stage1_results,
                                                    volume_depth,
                                                    translate_rotate_augmentation=False,
-                                                   elastic_augmentation=False,
-                                                   data_info_folder=DATA_INFO_FOLDER)
+                                                   elastic_augmentation=False)
                     image_batch2, _ = image_organ_sampler.load_image(batch_entries,
                                                    series2,
                                                    organ_id, organ_size[0], organ_size[1],
                                                    val_stage1_results,
                                                    volume_depth,
                                                    translate_rotate_augmentation=False,
-                                                   elastic_augmentation=False,
-                                                   data_info_folder=DATA_INFO_FOLDER)
+                                                   elastic_augmentation=False)
                 image_batch = torch.cat([image_batch1, image_batch2], dim=2)
 
             with torch.no_grad():
@@ -350,10 +377,16 @@ def validation_step():
                 labels_batch = torch.tensor(get_labels(batch_entries), device=config.device, dtype=torch.float32)
 
                 # do validation now
-                loss, preds, weights = single_validation_step(model, image_batch, labels_batch)
+                if use_deep_supervision:
+                    loss, preds, weights, deep_supervision_loss, ROI_preds = single_validation_step_cutmix(model, image_batch, labels_batch, organ_ROI)
+                else:
+                    loss, preds, weights = single_validation_step(model, image_batch, labels_batch)
 
                 val_metrics["loss"].add(loss, sum(list(weights)))
                 val_metrics["metric"].add(preds, torch.argmax(labels_batch, dim=-1))
+                if use_deep_supervision:
+                    val_metrics["ROI_loss"].add(deep_supervision_loss, length)
+                    val_metrics["ROI_metric"].add(ROI_preds, (organ_ROI > 0.5).to(torch.long))
 
             validated += length
             pbar.update(length)
@@ -426,8 +459,10 @@ if __name__ == "__main__":
         assert args.use_single_image, "Cutmix requires single image."
         assert args.channel_progression is not None, "Cutmix requires ResNet attention."
         SEGMENTATION_RESULTS_FOLDER_OVERRIDE = "EXTRACTED_STAGE1_RESULTS/stage1_organ_segmentator"
-        DATA_INFO_FOLDER = "EXTRACTED_STAGE1_RESULTS/transformed_segmentations/{}_{}/data_hdf5_cropped".format(train_dset_name, organ)
-        assert os.path.exists(DATA_INFO_FOLDER), "Data info folder\n{}\ndoes not exist.".format(DATA_INFO_FOLDER)
+        TRAIN_DATA_INFO_FOLDER = "EXTRACTED_STAGE1_RESULTS/transformed_segmentations/{}_{}/data_hdf5_cropped".format(train_dset_name, organ)
+        assert os.path.exists(TRAIN_DATA_INFO_FOLDER), "Data info folder\n{}\ndoes not exist.".format(TRAIN_DATA_INFO_FOLDER)
+        VAL_DATA_INFO_FOLDER = "EXTRACTED_STAGE1_RESULTS/transformed_segmentations/{}_{}/data_hdf5_cropped".format(val_dset_name, organ)
+        assert os.path.exists(VAL_DATA_INFO_FOLDER), "Data info folder\n{}\ndoes not exist.".format(VAL_DATA_INFO_FOLDER)
     else:
         SEGMENTATION_RESULTS_FOLDER_OVERRIDE = None
     train_stage1_results = manager_stage1_results.Stage1ResultsManager(train_dset_name, SEGMENTATION_RESULTS_FOLDER_OVERRIDE=SEGMENTATION_RESULTS_FOLDER_OVERRIDE)
