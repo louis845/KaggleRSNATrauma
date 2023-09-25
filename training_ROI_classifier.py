@@ -288,21 +288,25 @@ def validation_step():
             # sample now
             if use_single_image:
                 if use_async_sampler:
-                    image_batch, _ = image_organ_sampler_async.load_image(batch_entries,
+                    image_batch, organ_ROI = image_organ_sampler_async.load_image(batch_entries,
                                                                   series1,
                                                                   organ_id, organ_size[0], organ_size[1],
                                                                   val_stage1_results,
                                                                   sampling_depth,
                                                                   translate_rotate_augmentation=False,
-                                                                  elastic_augmentation=False)
+                                                                  elastic_augmentation=False,
+                                                                  data_info_folder=DATA_INFO_FOLDER,
+                                                                  load_perslice_segmentation=use_deep_supervision)
                 else:
-                    image_batch, _ = image_organ_sampler.load_image(batch_entries,
+                    image_batch, organ_ROI = image_organ_sampler.load_image(batch_entries,
                                                    series1,
                                                    organ_id, organ_size[0], organ_size[1],
                                                    val_stage1_results,
                                                    sampling_depth,
                                                    translate_rotate_augmentation=False,
-                                                   elastic_augmentation=False)
+                                                   elastic_augmentation=False,
+                                                   data_info_folder=DATA_INFO_FOLDER,
+                                                   load_perslice_segmentation=use_deep_supervision)
             else:
                 if use_async_sampler:
                     image_batch1, _ = image_organ_sampler_async.load_image(batch_entries,
@@ -311,14 +315,16 @@ def validation_step():
                                                                   val_stage1_results,
                                                                   volume_depth,
                                                                   translate_rotate_augmentation=False,
-                                                                  elastic_augmentation=False)
+                                                                  elastic_augmentation=False,
+                                                                  data_info_folder=DATA_INFO_FOLDER)
                     image_batch2, _ = image_organ_sampler_async.load_image(batch_entries,
                                                                   series2,
                                                                   organ_id, organ_size[0], organ_size[1],
                                                                   val_stage1_results,
                                                                   volume_depth,
                                                                   translate_rotate_augmentation=False,
-                                                                  elastic_augmentation=False)
+                                                                  elastic_augmentation=False,
+                                                                  data_info_folder=DATA_INFO_FOLDER)
                 else:
                     image_batch1, _ = image_organ_sampler.load_image(batch_entries,
                                                    series1,
@@ -326,14 +332,16 @@ def validation_step():
                                                    val_stage1_results,
                                                    volume_depth,
                                                    translate_rotate_augmentation=False,
-                                                   elastic_augmentation=False)
+                                                   elastic_augmentation=False,
+                                                   data_info_folder=DATA_INFO_FOLDER)
                     image_batch2, _ = image_organ_sampler.load_image(batch_entries,
                                                    series2,
                                                    organ_id, organ_size[0], organ_size[1],
                                                    val_stage1_results,
                                                    volume_depth,
                                                    translate_rotate_augmentation=False,
-                                                   elastic_augmentation=False)
+                                                   elastic_augmentation=False,
+                                                   data_info_folder=DATA_INFO_FOLDER)
                 image_batch = torch.cat([image_batch1, image_batch2], dim=2)
 
             with torch.no_grad():
@@ -423,7 +431,7 @@ if __name__ == "__main__":
     else:
         SEGMENTATION_RESULTS_FOLDER_OVERRIDE = None
     train_stage1_results = manager_stage1_results.Stage1ResultsManager(train_dset_name, SEGMENTATION_RESULTS_FOLDER_OVERRIDE=SEGMENTATION_RESULTS_FOLDER_OVERRIDE)
-    val_stage1_results = manager_stage1_results.Stage1ResultsManager(val_dset_name)
+    val_stage1_results = manager_stage1_results.Stage1ResultsManager(val_dset_name, SEGMENTATION_RESULTS_FOLDER_OVERRIDE=SEGMENTATION_RESULTS_FOLDER_OVERRIDE)
     train_stage1_results.validate_patient_ids_contained(training_entries)
     val_stage1_results.validate_patient_ids_contained(validation_entries)
 
@@ -608,6 +616,8 @@ if __name__ == "__main__":
     if use_deep_supervision:
         train_metrics["ROI_loss"] = metrics.NumericalMetric("train_ROI_loss")
         train_metrics["ROI_metric"] = metrics.BinaryMetrics("train_ROI_metric")
+        val_metrics["ROI_loss"] = metrics.NumericalMetric("val_ROI_loss")
+        val_metrics["ROI_metric"] = metrics.BinaryMetrics("val_ROI_metric")
 
     # Compile
     single_training_step_compile = torch.compile(single_training_step)
